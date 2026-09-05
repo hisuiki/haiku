@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP src tests kits bluetooth btpair ;
+
+UsePrivateHeaders bluetooth ;
+UseLibraryHeaders bluetooth ;
+
+SimpleTest btpair :
+	btpair.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+	;
+
+SimpleTest btreport :
+	btreport.cpp
+	: be [ TargetLibsupc++ ]
+	;
