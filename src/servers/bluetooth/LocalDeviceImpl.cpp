@@ -21,6 +21,7 @@
 #include <PincodeWindow.h>
 
 #include <FindDirectory.h>
+#include <BluetoothAudio.h>
 #include <stdio.h>
 #include <new>
 
@@ -1875,8 +1876,15 @@ LocalDeviceImpl::DisconnectionComplete(hci_ev_disconnection_complete_reply* even
 	if (rd != NULL) {
 		reply.AddData("bdaddr", B_ANY_TYPE, &rd->bdaddr, sizeof(bdaddr_t));
 
-		if (event->status == BT_OK || event->status == BT_NO_CONNECTION)
+		if (event->status == BT_OK || event->status == BT_NO_CONNECTION) {
 			rd->conn_state = RemoteDevice::DISCONNECTED;
+			port_id port = find_port(BLUETOOTH_AUDIO_PORT);
+			if (port >= B_OK) {
+				bluetooth_audio_connect notice = {rd->bdaddr};
+				write_port_etc(port, BLUETOOTH_AUDIO_DISCONNECT, &notice,
+					sizeof(notice), B_RELATIVE_TIMEOUT, 0);
+			}
+		}
 	}
 
 
@@ -2138,10 +2146,14 @@ LocalDeviceImpl::AuthComplete(struct hci_ev_auth_complete* eventData, BMessage* 
 
 	if (status == BT_OK) {
 		TRACE_BT("LocalDeviceImpl: Authentication Successful for handle %d\n", handle);
-		ServerRemoteDevice* rd = RemoteDeviceByHandle(eventData->handle);
-
-		SetConnEncryption(rd->handle, true);
-		((BluetoothServer*)be_app)->DiscoverServices(rd);
+		ServerRemoteDevice* rd = RemoteDeviceByHandle(handle);
+		if (rd != NULL) {
+			((BluetoothServer*)be_app)->DiscoverServices(rd);
+			if (rd->encryption_enabled)
+				((BluetoothServer*)be_app)->NotifyServices(rd);
+			else
+				SetConnEncryption(rd->handle, true);
+		}
 	} else {
 		TRACE_BT("LocalDeviceImpl: Authentication Failed for handle %d with status 0x%02x\n",
 			handle, status);

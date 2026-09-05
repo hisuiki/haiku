@@ -34,6 +34,7 @@ private:
 	status_t			_IssueRequest(const void *request, int32 size, BMallocIO* reply);
 
 	status_t			_NotifyHIDProfile(BMessage* attrList);
+	status_t			_NotifyAudioProfile();
 
 
 	int					fClientSocket;

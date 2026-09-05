@@ -1,0 +1,35 @@
+SubDir HAIKU_TOP src tests kits bluetooth audio ;
+
+UsePrivateHeaders bluetooth ;
+local audioDir = [ FDirName $(HAIKU_TOP) src add-ons media media-add-ons bluetooth ] ;
+UseHeaders $(audioDir) ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs ldac inc ] ;
+SEARCH_SOURCE += $(audioDir) ;
+
+SimpleTest bluetooth_audio_protocol_test : ProtocolTest.cpp A2dpProtocol.cpp ;
+
+SimpleTest bluetooth_ldac_test :
+	LdacTest.cpp
+	: libldac_encoder.a [ TargetLibstdc++ ]
+;
+
+UseBuildFeatureHeaders ffmpeg ;
+UseHeaders [ BuildFeatureAttribute ffmpeg : headers : path ] ;
+SimpleTest bluetooth_audio_test :
+	AudioTest.cpp A2dpProtocol.cpp AudioEncoder.cpp A2dpSession.cpp
+	: [ BuildFeatureAttribute ffmpeg : libraries ]
+	  libldac_encoder.a be network [ TargetLibstdc++ ]
+;
+
+SimpleTest bluetooth_audio_media_test :
+	MediaTest.cpp BluetoothAudioNode.cpp A2dpProtocol.cpp AudioEncoder.cpp
+	A2dpSession.cpp
+	: [ BuildFeatureAttribute ffmpeg : libraries ]
+	  libldac_encoder.a be media network [ TargetLibstdc++ ]
+;
+
+UseLibraryHeaders bluetooth ;
+SimpleTest bluetooth_audio_connection_test :
+	ConnectionTest.cpp
+	: be libbluetooth.so [ TargetLibsupc++ ]
+;

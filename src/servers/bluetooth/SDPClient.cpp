@@ -1,10 +1,12 @@
 #include <stdio.h>
+#include <errno.h>
 #include <sys/socket.h>
 
 #include <String.h>
 
 #include <bluetooth/l2cap.h>
 #include <BluetoothHID.h>
+#include <BluetoothAudio.h>
 #include <OS.h>
 #include <sys/time.h>
 
@@ -40,9 +42,15 @@ SDPClient::Start()
 	status_t status;
 
 	fClientSocket = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BLUETOOTH_PROTO_L2CAP);
+	if (fClientSocket < 0)
+		return errno;
+	timeval connectTimeout = {5, 0};
+	setsockopt(fClientSocket, SOL_SOCKET, SO_SNDTIMEO, &connectTimeout,
+		sizeof(connectTimeout));
 
 	status = connect(fClientSocket, (sockaddr*)&fSockAddrL2cap, sizeof(sockaddr_l2cap));
 	if (status < 0) {
+		status = errno;
 		TRACE_BT("SDP: Could not connect client socket (%s)...\n", strerror(status));
 		Stop();
 		return status;
@@ -77,7 +85,7 @@ SDPClient::Start()
 void
 SDPClient::Stop()
 {
-	if (fClientSocket > 0) {
+	if (fClientSocket >= 0) {
 		close(fClientSocket);
 		fClientSocket = -1;
 	}
@@ -164,6 +172,7 @@ SDPClient::RequestServiceRecords()
 status_t
 SDPClient::NotifyProfiles()
 {
+	status_t result = B_NOT_SUPPORTED;
 	BMessage attrListMsg;
 	for (int i = 0; fRemoteDevice->services.FindMessage("service", i, &attrListMsg) == B_OK; i++) {
 		void* data;
@@ -194,13 +203,20 @@ SDPClient::NotifyProfiles()
 
 			switch (service_uuid) {
 				case SDP_SERVICE_CLASS_HUMAN_INTERFACE_DEVICE:
-					return _NotifyHIDProfile(&attrListMsg);
+					if (_NotifyHIDProfile(&attrListMsg) == B_OK)
+						result = B_OK;
+					break;
+
+				case SDP_SERVICE_CLASS_AUDIO_SINK:
+					if (_NotifyAudioProfile() == B_OK)
+						result = B_OK;
+					break;
 
 				// more services shall be added here
 			}
 		}
 	}
-	return B_ERROR;
+	return result;
 }
 
 
@@ -280,4 +296,18 @@ SDPClient::_NotifyHIDProfile(BMessage* attrList)
 	bluetooth_hid_connect_request request;
 	request.address = fRemoteDevice->bdaddr;
 	return write_port(port, BLUETOOTH_HID_CONNECT, &request, sizeof(request));
+}
+
+
+status_t
+SDPClient::_NotifyAudioProfile()
+{
+	port_id port = find_port(BLUETOOTH_AUDIO_PORT);
+	if (port < B_OK) {
+		fprintf(stderr, "Bluetooth audio: media output add-on is not running\n");
+		return port;
+	}
+	bluetooth_audio_connect request = {fRemoteDevice->bdaddr};
+	return write_port_etc(port, BLUETOOTH_AUDIO_CONNECT, &request,
+		sizeof(request), B_RELATIVE_TIMEOUT, 100000);
 }

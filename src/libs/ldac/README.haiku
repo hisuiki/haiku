@@ -1,0 +1,10 @@
+LDAC encoder from Android Open Source Project (Sony Corporation).
+
+Upstream: https://android.googlesource.com/platform/external/libldac
+Revision: eeee1a3f5f8df1282e3a6d297085885fd886737b
+License: Apache-2.0; see LICENSE and NOTICE.
+
+The Bluetooth media add-on builds src/ldaclib.c and src/ldacBT.c, which include
+the remaining implementation files. Haiku adds ldacBT_set_bitrate() so the
+output node can select lower frame lengths such as 128 and 256 kb/s. Only the
+encoder is provided by this library.

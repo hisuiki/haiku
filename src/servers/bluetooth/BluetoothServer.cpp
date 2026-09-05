@@ -341,7 +341,13 @@ BluetoothServer::DiscoverServices(ServerRemoteDevice* rd)
 {
 	TRACE_BT("BluetoothServer: Discovering Services for %s\n", rd->friendly_name.String());
 	SDPClient sdpClient(rd);
-	sdpClient.Start();
+	rd->services.MakeEmpty();
+	status_t status = sdpClient.Start();
+	if (status != B_OK) {
+		fprintf(stderr, "Bluetooth service discovery: connect failed: %s\n",
+			strerror(status));
+		return;
+	}
 	if (sdpClient.RequestServiceRecords() == B_OK)
 		TRACE_BT("SDP: Service records loaded successfully\n");
 	else
@@ -508,10 +514,11 @@ BluetoothServer::HandleSimpleRequest(BMessage* message, BMessage* reply)
 	// we are gonna need issue the command ...
 	if (lDeviceImpl->ProcessSimpleRequest(DetachCurrentMessage()) == B_OK)
 		return B_WOULD_BLOCK;
-	else {
-		lDeviceImpl->Unregister();
-		return B_ERROR;
-	}
+
+	// A rejected or unsupported controller command must not close the
+	// transport.  Other clients, including active L2CAP audio streams, may be
+	// using the same controller.
+	return B_ERROR;
 
 }
 
@@ -639,4 +646,3 @@ main(int /*argc*/, char** /*argv*/)
 
 	return 0;
 }
-

@@ -1,0 +1,15 @@
+SubDir HAIKU_TOP src libs ldac ;
+
+UseHeaders [ FDirName $(SUBDIR) inc ] ;
+UseHeaders [ FDirName $(SUBDIR) src ] ;
+
+local architectureObject ;
+for architectureObject in [ MultiArchSubDirSetup ] {
+	on $(architectureObject) {
+		SEARCH_SOURCE += [ FDirName $(SUBDIR) src ] ;
+		StaticLibrary [ MultiArchDefaultGristFiles libldac_encoder.a ] :
+			ldaclib.c
+			ldacBT.c
+		;
+	}
+}

@@ -1797,6 +1797,12 @@ AboutView::_CreateCreditsView()
 		.SetLicenses(kLGPLv21, kLGPLv2, NULL)
 		.SetURL("https://www.ffmpeg.org"));
 
+	// LDAC copyrights
+	_AddPackageCredit(PackageCredit("LDAC encoder")
+		.SetCopyright(B_TRANSLATE(COPYRIGHT_STRING "2003-2016 Sony Corporation."))
+		.SetLicenses("Apache v2", "LDAC", NULL)
+		.SetURL("https://android.googlesource.com/platform/external/libldac"));
+
 	// AGG copyrights
 	_AddPackageCredit(PackageCredit("AntiGrain Geometry")
 		.SetCopyright(B_TRANSLATE(COPYRIGHT_STRING "2002-2006 Maxim "

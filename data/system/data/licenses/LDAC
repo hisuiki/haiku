@@ -1,0 +1,14 @@
+LDAC encoder
+Copyright (C) 2003-2016 Sony Corporation
+
+Licensed under the Apache License, Version 2.0. See "Apache v2" in this
+directory for the complete license, or https://www.apache.org/licenses/LICENSE-2.0.
+
+Upstream NOTICE:
+
+---------------
+ Certification
+---------------
+   Taking the certification process is required to use LDAC in your products.
+   For the detail of certification process, see the following URL:
+      https://www.sony.net/Products/LDAC/aosp/

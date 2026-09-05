@@ -1,0 +1,29 @@
+SubDir HAIKU_TOP src add-ons media media-add-ons bluetooth ;
+
+UsePrivateHeaders bluetooth ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs ldac inc ] ;
+UseHeaders [ FDirName $(HAIKU_TOP) src libs ldac src ] ;
+
+local sources =
+	A2dpProtocol.cpp
+	A2dpSession.cpp
+	AudioEncoder.cpp
+	BluetoothAudioAddOn.cpp
+	BluetoothAudioNode.cpp
+;
+
+local architectureObject ;
+for architectureObject in [ MultiArchSubDirSetup ] {
+	on $(architectureObject) {
+		UseBuildFeatureHeaders ffmpeg ;
+		Includes [ FGristFiles $(sources) ]
+			: [ BuildFeatureAttribute ffmpeg : headers ] ;
+		UseHeaders [ BuildFeatureAttribute ffmpeg : headers : path ] ;
+		Addon [ MultiArchDefaultGristFiles bluetooth_audio.media_addon ] :
+			$(sources)
+			: [ BuildFeatureAttribute ffmpeg : libraries ]
+			[ MultiArchDefaultGristFiles libldac_encoder.a ]
+			be media network [ TargetLibstdc++ ]
+		;
+	}
+}

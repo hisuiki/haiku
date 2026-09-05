@@ -214,6 +214,7 @@ SYSTEM_ADD_ONS_TRANSLATORS += [ FFilterByBuildFeatures
 ] ;
 
 SYSTEM_ADD_ONS_MEDIA += [ FFilterByBuildFeatures
+	bluetooth_audio.media_addon@ffmpeg
 	cortex_audioadapter.media_addon
 	cortex_flanger.media_addon
 	cortex_logging_consumer.media_addon

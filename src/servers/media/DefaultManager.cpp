@@ -566,6 +566,16 @@ DefaultManager::_FindTimeSource()
 		TRACE("Default DAC node does not exist!\n");
 	}
 
+	// Outputs without a hardware clock, such as network audio sinks, must not
+	// be slaved to an unrelated physical device. That device can remain idle,
+	// leaving its published clock mapping stale and eventually making timed
+	// buffer conversion fail. The system clock is stable for these outputs.
+	if (fSystemTimeSource != -1) {
+		fTimeSource = fSystemTimeSource;
+		TRACE("Using the system timesource for a clockless audio output\n");
+		return;
+	}
+
 	/* Now try to find another physical audio out node
 	 */
 	input.type = B_MEDIA_RAW_AUDIO;
