@@ -415,6 +415,7 @@ AddSymlinkToPackage add-ons Tracker
 	: /boot/system/apps/DiskUsage : DiskUsage ;
 
 AddFilesToPackage add-ons input_server devices :
+	<input>bluetooth_hid
 	<input>keyboard
 	<input>mouse
 	<input>tablet

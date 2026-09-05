@@ -1,0 +1,10 @@
+SubDir HAIKU_TOP src add-ons input_server devices bluetooth_hid ;
+
+UsePrivateHeaders bluetooth input shared ;
+
+Addon <input>bluetooth_hid :
+	BluetoothHIDInputDevice.cpp
+	HIDReportMap.cpp
+	: be input_server network libbluetooth.so
+	  <$(TARGET_PACKAGING_ARCH)>libshared.a [ TargetLibstdc++ ]
+;

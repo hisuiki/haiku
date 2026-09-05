@@ -4,6 +4,8 @@
 #include <String.h>
 
 #include <bluetooth/l2cap.h>
+#include <BluetoothHID.h>
+#include <OS.h>
 #include <sys/time.h>
 
 #include "Debug.h"
@@ -268,5 +270,14 @@ status_t
 SDPClient::_NotifyHIDProfile(BMessage* attrList)
 {
 	TRACE_BT("Notifying HID Profile...\n");
-	return B_NOT_SUPPORTED;
+
+	port_id port = find_port(BLUETOOTH_HID_PORT_NAME);
+	if (port < B_OK) {
+		TRACE_BT("Bluetooth HID input device is not running\n");
+		return port;
+	}
+
+	bluetooth_hid_connect_request request;
+	request.address = fRemoteDevice->bdaddr;
+	return write_port(port, BLUETOOTH_HID_CONNECT, &request, sizeof(request));
 }
