@@ -28,6 +28,9 @@ HciConnection::HciConnection(hci_id hid)
 	mutex_init(&fLock, "HciConnection");
 	Hid = hid;
 	fNextIdent = L2CAP_FIRST_CID;
+	destination_type = 0;
+	low_energy = false;
+	disconnect_hook = NULL;
 
 	// TODO: This doesn't really belong here...
 	interface_address = {};
@@ -98,6 +101,8 @@ RemoveConnection(const bdaddr_t& destination, hci_id hid)
 		|| conn->GetDoublyLinkedListLink()->previous != NULL
 		|| conn == sConnectionList.Head()) {
 		DisconnectL2capEndpoints(conn);
+		if (conn->disconnect_hook != NULL)
+			conn->disconnect_hook(conn);
 
 		MutexLocker locker(&sConnectionListLock);
 		sConnectionList.Remove(conn);
@@ -123,6 +128,8 @@ RemoveConnection(uint16 handle, hci_id hid)
 		|| conn->GetDoublyLinkedListLink()->previous != NULL
 		|| conn == sConnectionList.Head()) {
 		DisconnectL2capEndpoints(conn);
+		if (conn->disconnect_hook != NULL)
+			conn->disconnect_hook(conn);
 
 		MutexLocker locker(&sConnectionListLock);
 		sConnectionList.Remove(conn);

@@ -98,115 +98,98 @@ status_t
 Assemble(bluetooth_device* bluetoothDevice, bt_packet_t type, void* data,
 	size_t count)
 {
-	net_buffer* nbuf = bluetoothDevice->fBuffersRx[type];
+	if (type != BT_EVENT && type != BT_ACL)
+		return B_NOT_SUPPORTED;
 
-	size_t currentPacketLen = 0;
+	const size_t headerSize = type == BT_EVENT
+		? HCI_EVENT_HDR_SIZE : HCI_ACL_HDR_SIZE;
+	uint8* cursor = (uint8*)data;
 
-	while (count) {
+	while (count > 0) {
+		net_buffer* nbuf = bluetoothDevice->fBuffersRx[type];
+
+		// Fast path. USB interrupt transfers may contain more than one event,
+		// so consume exactly one packet and keep parsing the remainder.
+		if (nbuf == NULL && count >= headerSize) {
+			size_t packetSize;
+			if (type == BT_EVENT) {
+				hci_event_header* header = (hci_event_header*)cursor;
+				packetSize = HCI_EVENT_HDR_SIZE + header->elen;
+			} else {
+				hci_acl_header* header = (hci_acl_header*)cursor;
+				packetSize = HCI_ACL_HDR_SIZE
+					+ B_LENDIAN_TO_HOST_INT16(header->alen);
+			}
+
+			if (count >= packetSize && type == BT_EVENT) {
+				btCoreData->PostEvent(bluetoothDevice, cursor, packetSize);
+				cursor += packetSize;
+				count -= packetSize;
+				continue;
+			}
+
+			bluetoothDevice->fExpectedPacketSize[type] = packetSize;
+		}
 
 		if (nbuf == NULL) {
-			// new buffer incoming
-			switch (type) {
-				case BT_EVENT:
-					if (count >= HCI_EVENT_HDR_SIZE) {
-						struct hci_event_header* headerPacket
-							= (struct hci_event_header*)data;
-						bluetoothDevice->fExpectedPacketSize[type]
-							= HCI_EVENT_HDR_SIZE + headerPacket->elen;
-
-						if (count >= bluetoothDevice->fExpectedPacketSize[type]) {
-							// the whole packet is here so it can be already posted.
-							ERROR("%s: EVENT posted in HCI!!!\n", __func__);
-							btCoreData->PostEvent(bluetoothDevice, data,
-								bluetoothDevice->fExpectedPacketSize[type]);
-
-						} else {
-							nbuf = gBufferModule->create(
-								bluetoothDevice->fExpectedPacketSize[type]);
-							bluetoothDevice->fBuffersRx[type] = nbuf;
-
-							nbuf->protocol = type;
-						}
-
-					} else {
-						panic("EVENT frame corrupted\n");
-						return EILSEQ;
-					}
-					break;
-
-				case BT_ACL:
-					if (count >= HCI_ACL_HDR_SIZE) {
-						struct hci_acl_header* headerPkt = (struct hci_acl_header*)data;
-
-						bluetoothDevice->fExpectedPacketSize[type] = HCI_ACL_HDR_SIZE
-							+ B_LENDIAN_TO_HOST_INT16(headerPkt->alen);
-
-						// Create the buffer -> TODO: this allocation can fail
-						nbuf = gBufferModule->create(
-							bluetoothDevice->fExpectedPacketSize[type]);
-						bluetoothDevice->fBuffersRx[type] = nbuf;
-
-						nbuf->protocol = type;
-					} else {
-						panic("ACL frame corrupted\n");
-						return EILSEQ;
-					}
-					break;
-
-				case BT_SCO:
-
-					break;
-
-				default:
-					panic("unknown packet type in assembly");
-					break;
-			}
-
-			currentPacketLen = bluetoothDevice->fExpectedPacketSize[type];
-
-		} else {
-			// Continuation of a packet
-			currentPacketLen = bluetoothDevice->fExpectedPacketSize[type] - nbuf->size;
+			nbuf = gBufferModule->create(0);
+			if (nbuf == NULL)
+				return B_NO_MEMORY;
+			nbuf->protocol = type;
+			bluetoothDevice->fBuffersRx[type] = nbuf;
 		}
-		if (nbuf != NULL) {
-			currentPacketLen = min_c(currentPacketLen, count);
 
-			gBufferModule->append(nbuf, data, currentPacketLen);
+		// A USB transfer is allowed to split even the HCI header. Accumulate it
+		// first, then derive the complete packet length.
+		if (bluetoothDevice->fExpectedPacketSize[type] == 0) {
+			size_t bytes = min_c(count, headerSize - nbuf->size);
+			status_t status = gBufferModule->append(nbuf, cursor, bytes);
+			if (status != B_OK)
+				return status;
+			cursor += bytes;
+			count -= bytes;
+			if (nbuf->size < headerSize)
+				continue;
 
-			if ((bluetoothDevice->fExpectedPacketSize[type] - nbuf->size) == 0) {
-
-				switch (nbuf->protocol) {
-					case BT_EVENT:
-						panic("need to send full buffer to btdatacore!\n");
-						btCoreData->PostEvent(bluetoothDevice, data,
-							bluetoothDevice->fExpectedPacketSize[type]);
-
-						break;
-					case BT_ACL:
-						// TODO: device descriptor has been fetched better not
-						// pass id again
-						TRACE("%s: ACL parsed in ACL!\n", __func__);
-						AclAssembly(nbuf, bluetoothDevice->index);
-						break;
-					default:
-
-						break;
-				}
-
-				bluetoothDevice->fBuffersRx[type] = nbuf = NULL;
-				bluetoothDevice->fExpectedPacketSize[type] = 0;
+			uint8 headerBytes[HCI_ACL_HDR_SIZE];
+			status = gBufferModule->read(nbuf, 0, headerBytes, headerSize);
+			if (status != B_OK)
+				return status;
+			if (type == BT_EVENT) {
+				hci_event_header* header = (hci_event_header*)headerBytes;
+				bluetoothDevice->fExpectedPacketSize[type]
+					= HCI_EVENT_HDR_SIZE + header->elen;
 			} else {
-				if (type == BT_ACL) {
-					TRACE("%s: ACL Packet not filled size %" B_PRIu32
-						" expected=%" B_PRIuSIZE "\n", __func__, nbuf->size,
-						bluetoothDevice->fExpectedPacketSize[type]);
-				}
+				hci_acl_header* header = (hci_acl_header*)headerBytes;
+				bluetoothDevice->fExpectedPacketSize[type] = HCI_ACL_HDR_SIZE
+					+ B_LENDIAN_TO_HOST_INT16(header->alen);
 			}
-
 		}
-		// in case in the pipe there is info about the next buffer
-		count -= currentPacketLen;
-		data = (void*)((uint8*)data + currentPacketLen);
+
+		size_t remaining = bluetoothDevice->fExpectedPacketSize[type] - nbuf->size;
+		size_t bytes = min_c(count, remaining);
+		status_t status = gBufferModule->append(nbuf, cursor, bytes);
+		if (status != B_OK)
+			return status;
+		cursor += bytes;
+		count -= bytes;
+
+		if (nbuf->size != bluetoothDevice->fExpectedPacketSize[type])
+			continue;
+
+		bluetoothDevice->fBuffersRx[type] = NULL;
+		bluetoothDevice->fExpectedPacketSize[type] = 0;
+		if (type == BT_EVENT) {
+			uint8 event[HCI_MAX_EVENT_SIZE];
+			if (nbuf->size > sizeof(event)
+				|| gBufferModule->read(nbuf, 0, event, nbuf->size) != B_OK) {
+				gBufferModule->free(nbuf);
+				return EILSEQ;
+			}
+			btCoreData->PostEvent(bluetoothDevice, event, nbuf->size);
+			gBufferModule->free(nbuf);
+		} else
+			AclAssembly(nbuf, bluetoothDevice->index);
 	}
 
 	return B_OK;
@@ -333,9 +316,16 @@ PostACL(hci_id hciId, net_buffer* buffer)
 		return B_ERROR;
 	}
 
+	// A Low Energy controller has no flush timeout to honour and rejects the
+	// automatically flushable start flag outright, which would silently lose
+	// every packet sent over such a link.
+	HciConnection* connection = btCoreData->ConnectionByHandle(handle, hciId);
+	if (connection != NULL && connection->low_energy)
+		flag = HCI_ACL_PACKET_START_NO_FLUSH;
+
 	TRACE("%s: index 0x%" B_PRIx32 " try to send bt packet of %" B_PRIu32
-		" bytes (flags 0x%" B_PRIx32 "):\n", __func__, device->index,
-		buffer->size, buffer->flags);
+		" bytes (flags 0x%" B_PRIx16 "):\n", __func__, device->index,
+		buffer->size, buffer->buffer_flags);
 
 	// TODO: ATOMIC! any other thread should stop here
 	do {
@@ -514,4 +504,3 @@ module_info* modules[] = {
 	(module_info*)&sBluetoothModule,
 	NULL
 };
-

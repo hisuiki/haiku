@@ -41,6 +41,9 @@ struct HciConnection : DoublyLinkedListLinkImpl<HciConnection> {
 	hci_id				Hid;
 	bluetooth_device*	ndevice;
 	bdaddr_t			destination;
+	// LE_PUBLIC_ADDRESS or LE_RANDOM_ADDRESS, only meaningful on an LE link.
+	uint8				destination_type;
+	bool				low_energy;
 	uint16				handle;
 	int					type;
 	uint16				mtu;

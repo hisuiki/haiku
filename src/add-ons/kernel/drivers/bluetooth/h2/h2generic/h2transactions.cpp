@@ -61,8 +61,11 @@ event_complete(void* cookie, status_t status, void* data, size_t actual_len)
 	if (bdev == NULL)
 		return;
 
-	if (status == B_CANCELED || status == B_DEV_CRC_ERROR)
-		return; // or not running anymore...
+	if (status == B_CANCELED)
+		return; // not running anymore
+
+	if (status != B_OK)
+		bdev->stat.errorRX++;
 
 	if (status != B_OK || actual_len == 0)
 		goto resubmit;
@@ -100,8 +103,11 @@ acl_rx_complete(void* cookie, status_t status, void* data, size_t actual_len)
 	if (bdev == NULL)
 		return;
 
-	if (status == B_CANCELED || status == B_DEV_CRC_ERROR)
-		return; // or not running anymore...
+	if (status == B_CANCELED)
+		return; // not running anymore
+
+	if (status != B_OK)
+		bdev->stat.errorRX++;
 
 	if (status != B_OK || actual_len == 0)
 		goto resubmit;

@@ -23,6 +23,9 @@ struct hci_acl_header {
 
 /* PB flag values */
 /* 00 - reserved for future use */
+/* A Low Energy link has no flush timeout, so automatically flushable packets
+   do not exist on one: everything sent over it must be start-no-flush. */
+#define	HCI_ACL_PACKET_START_NO_FLUSH	0x0
 #define	HCI_ACL_PACKET_FRAGMENT		0x1 
 #define	HCI_ACL_PACKET_START		0x2
 /* 11 - reserved for future use */

@@ -108,7 +108,7 @@ AclAssembly(net_buffer* nbuf, hci_id hid)
 		}
 
 		TRACE("%s: New L2CAP, handle=%#x length=%d\n", __func__, con_handle,
-			le16toh(l2capHeader->length));
+			B_LENDIAN_TO_HOST_INT16(l2capHeader->length));
 
 		// Start new L2CAP packet
 		conn->currentRxPacket = nbuf;
