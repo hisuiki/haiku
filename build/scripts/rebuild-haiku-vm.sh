@@ -105,7 +105,7 @@ recover_vm_on_error() {
 }
 trap recover_vm_on_error EXIT
 
-required_commands=(virsh lsusb stat awk)
+required_commands=(virsh lsusb stat awk setsid)
 if (( ! SKIP_BUILD )); then
 	required_commands+=(jam)
 fi
@@ -334,7 +334,9 @@ capture_serial_console() {
 		local previous
 		previous=$(<"$pid_file")
 		if [[ $previous =~ ^[0-9]+$ ]]; then
-			kill "$previous" 2>/dev/null || true
+			# The Python pty helper forks virsh. Stop its complete session so an
+			# orphaned virsh cannot retain the single libvirt console connection.
+			kill -- "-$previous" 2>/dev/null || true
 		fi
 		rm -f "$pid_file"
 	fi
@@ -342,9 +344,10 @@ capture_serial_console() {
 	local log_file
 	log_file=$SERIAL_LOG_DIR/serial-$(date +%Y%m%d-%H%M%S).log
 
-	# nohup execs python3 directly, so $! is the reader and it outlives this
-	# script. When it is killed the pty master closes and virsh follows.
-	nohup python3 -c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]))' \
+	# Keep the pty helper and virsh in a dedicated session. This makes the PID
+	# file sufficient to retire the whole reader tree on the next deployment.
+	nohup setsid --wait python3 \
+		-c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]))' \
 		virsh --connect "$LIBVIRT_URI" console "$VM_NAME" --force \
 		>"$log_file" 2>&1 &
 	local reader=$!
@@ -363,7 +366,7 @@ capture_serial_console() {
 
 	log "Capturing kernel serial output to $log_file (pid $reader)"
 	printf 'Follow it with: tail -f %s\n' "$SERIAL_LOG_DIR/serial-latest.log"
-	printf 'Stop it with:   kill %s\n' "$reader"
+	printf 'Stop it with:   kill -- -%s\n' "$reader"
 }
 
 if [[ $CAPTURE_SERIAL != 0 ]]; then
