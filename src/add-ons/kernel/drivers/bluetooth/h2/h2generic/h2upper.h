@@ -14,6 +14,8 @@
 status_t post_packet_up(bt_usb_dev* bdev, bt_packet_t type, void* buf);
 status_t send_packet(hci_id hid, bt_packet_t type, net_buffer* nbuf);
 status_t send_command(hci_id hid, snet_buffer* snbuf);
+status_t queue_acl_packet(hci_id hid, net_buffer* nbuf);
+void acl_packet_complete(bt_usb_dev* bdev);
 
 void sched_tx_processing(bt_usb_dev* bdev);
 

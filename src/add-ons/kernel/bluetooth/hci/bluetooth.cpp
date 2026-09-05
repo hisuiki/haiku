@@ -203,9 +203,6 @@ HciPacketHandler(void* data, int32 code, size_t size)
 
 	bluetooth_device* bluetoothDevice = FindDeviceByID(deviceId);
 
-	TRACE("%s: to assemble %" B_PRIuSIZE " bytes of 0x%" B_PRIx32 "\n",
-		__func__, size, deviceId);
-
 	if (bluetoothDevice != NULL) {
 		return Assemble(bluetoothDevice, Bluetooth::CodeHandler::Protocol(code),
 			data, size);
@@ -262,6 +259,11 @@ RegisterDriver(bt_hci_transport_hooks* hooks, bluetooth_device** _device)
 status_t
 UnregisterDriver(hci_id id)
 {
+	// HciConnection objects contain a pointer to the device.  Close every
+	// dependent protocol endpoint while that pointer is still valid.
+	btCoreData->RemoveConnections(id);
+
+	MutexLocker locker(&sListLock);
 	bluetooth_device* device = FindDeviceByID(id);
 
 	if (device == NULL)
@@ -323,10 +325,6 @@ PostACL(hci_id hciId, net_buffer* buffer)
 	if (connection != NULL && connection->low_energy)
 		flag = HCI_ACL_PACKET_START_NO_FLUSH;
 
-	TRACE("%s: index 0x%" B_PRIx32 " try to send bt packet of %" B_PRIu32
-		" bytes (flags 0x%" B_PRIx16 "):\n", __func__, device->index,
-		buffer->size, buffer->buffer_flags);
-
 	// TODO: ATOMIC! any other thread should stop here
 	do {
 		// Divide packet if big enough
@@ -357,7 +355,6 @@ PostACL(hci_id hciId, net_buffer* buffer)
 		// Send to driver
 		curr_frame->protocol = BT_ACL;
 
-		TRACE("%s: Tolower nbuf %p!\n", __func__, curr_frame);
 		// We could pass a cookie and avoid the driver fetch the Id
 		device->hooks->SendACL(device->index, curr_frame);
 		flag = HCI_ACL_PACKET_FRAGMENT;

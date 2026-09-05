@@ -7,6 +7,7 @@
 
 #include "h2upper.h"
 
+#include <util/AutoLock.h>
 #include <string.h>
 
 #include <bluetooth/bluetooth.h>
@@ -16,7 +17,88 @@
 #include "h2debug.h"
 #include "h2generic.h"
 #include "h2transactions.h"
+#include "h2util.h"
 #include "snet_buffer.h"
+
+
+static const uint32 kMaxQueuedAclPackets = 64;
+
+
+static void
+submit_next_acl(bt_usb_dev* bdev)
+{
+	for (;;) {
+		net_buffer* buffer;
+		{
+			MutexLocker locker(&bdev->aclTxLock);
+			if (bdev->aclTxClosing || bdev->aclTxPending
+				|| list_is_empty(&bdev->nbuffersTx[BT_ACL]))
+				return;
+
+			buffer = (net_buffer*)list_remove_head_item(
+				&bdev->nbuffersTx[BT_ACL]);
+			bdev->aclTxQueued--;
+			bdev->aclTxPending = true;
+		}
+
+		if (submit_tx_acl(bdev, buffer) == B_OK)
+			return;
+
+		// A failed USB submission has no completion callback. Release its
+		// buffer here, clear the in-flight slot, and continue with the next
+		// packet so a transient failure cannot stall the entire ACL queue.
+		nb_destroy(buffer);
+		MutexLocker locker(&bdev->aclTxLock);
+		bdev->aclTxPending = false;
+	}
+}
+
+
+status_t
+queue_acl_packet(hci_id hid, net_buffer* buffer)
+{
+	bt_usb_dev* bdev = fetch_device(NULL, hid);
+	if (bdev == NULL) {
+		nb_destroy(buffer);
+		return B_ERROR;
+	}
+
+	{
+		MutexLocker locker(&bdev->aclTxLock);
+		if (bdev->aclTxClosing || (bdev->state & RUNNING) == 0) {
+			nb_destroy(buffer);
+			return B_OK;
+		}
+
+		// Audio is real-time.  If a consumer outruns the controller, discard
+		// the oldest queued packet instead of accumulating audible latency.
+		if (bdev->aclTxQueued == kMaxQueuedAclPackets) {
+			net_buffer* oldest = (net_buffer*)list_remove_head_item(
+				&bdev->nbuffersTx[BT_ACL]);
+			nb_destroy(oldest);
+			bdev->aclTxQueued--;
+			bdev->stat.rejectedTX++;
+		}
+		list_add_item(&bdev->nbuffersTx[BT_ACL], buffer);
+		bdev->aclTxQueued++;
+	}
+
+	submit_next_acl(bdev);
+	return B_OK;
+}
+
+
+void
+acl_packet_complete(bt_usb_dev* bdev)
+{
+	{
+		MutexLocker locker(&bdev->aclTxLock);
+		bdev->aclTxPending = false;
+		if (bdev->aclTxClosing)
+			return;
+	}
+	submit_next_acl(bdev);
+}
 
 
 // TODO: split for commands and comunication (ACL & SCO)

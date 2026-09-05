@@ -55,9 +55,6 @@ event_complete(void* cookie, status_t status, void* data, size_t actual_len)
 	// bt_usb_dev* bdev = fetch_device(cookie, 0); -> safer / slower option
 	status_t error;
 
-	TRACE("%s: cookie@%p status=%s len=%" B_PRIuSIZE "\n", __func__, cookie,
-		strerror(status), actual_len);
-
 	if (bdev == NULL)
 		return;
 
@@ -319,10 +316,10 @@ command_complete(void* cookie, status_t status, void* data, size_t actual_len)
 void
 acl_tx_complete(void* cookie, status_t status, void* data, size_t actual_len)
 {
-	net_buffer* nbuf = (net_buffer*)cookie;
-	bt_usb_dev* bdev = GET_DEVICE(nbuf);
+	acl_tx_transfer_t* transfer = (acl_tx_transfer_t*)cookie;
+	bt_usb_dev* bdev = transfer->bdev;
 
-	//debugf("fetched=%p type %lx %p\n", bdev, nbuf->type, data);
+	//debugf("fetched=%p type %lx %p\n", bdev, transfer->nbuf->type, data);
 
 	if (status == B_OK) {
 		bdev->stat.successfulTX++;
@@ -332,11 +329,10 @@ acl_tx_complete(void* cookie, status_t status, void* data, size_t actual_len)
 		// the packet has been lost, too late to requeue it
 	}
 
-	nb_destroy(nbuf);
-
-#ifdef BT_RESCHEDULING_AFTER_COMPLETITIONS
-	schedTxProcessing(bdev);
-#endif
+	nb_destroy(transfer->nbuf);
+	free(transfer->data);
+	free(transfer);
+	acl_packet_complete(bdev);
 }
 
 
@@ -405,23 +401,46 @@ submit_tx_acl(bt_usb_dev* bdev, net_buffer* nbuf)
 {
 	status_t error;
 
-	// set cookie
-	SET_DEVICE(nbuf, bdev->hdev);
-
 	if ((bdev->state & RUNNING) == 0) {
 		return B_DEV_NOT_READY;
 	}
+
+	// The network stack may represent an L2CAP packet with several data
+	// nodes (for example, after prepending the L2CAP and HCI headers).  USB
+	// bulk transfers require one contiguous virtual buffer, so keep a linear
+	// copy alive until the asynchronous transfer completes.
+	acl_tx_transfer_t* transfer
+		= (acl_tx_transfer_t*)malloc(sizeof(acl_tx_transfer_t));
+	void* data = malloc(nbuf->size);
+	if (transfer == NULL || data == NULL) {
+		free(transfer);
+		free(data);
+		return B_NO_MEMORY;
+	}
+
+	error = nb->read(nbuf, 0, data, nbuf->size);
+	if (error != B_OK) {
+		free(data);
+		free(transfer);
+		return error;
+	}
+
+	transfer->bdev = bdev;
+	transfer->nbuf = nbuf;
+	transfer->data = data;
 	/*
 	debugf("### Outgoing ACL: len = %ld\n", nbuf->size);
 	for (uint32 index = 0 ; index < nbuf->size; index++ ) {
-		dprintf("%x:",((uint8*)nb_get_whole_buffer(nbuf))[index]);
+		dprintf("%x:", ((uint8*)data)[index]);
 	}
 	*/
 
-	error = usb->queue_bulk(bdev->bulk_out_ep->handle, nb_get_whole_buffer(nbuf),
-		nbuf->size, acl_tx_complete, (void*)nbuf);
+	error = usb->queue_bulk(bdev->bulk_out_ep->handle, data, nbuf->size,
+		acl_tx_complete, transfer);
 
 	if (error != B_OK) {
+		free(data);
+		free(transfer);
 		bdev->stat.rejectedTX++;
 	} else {
 		bdev->stat.acceptedTX++;

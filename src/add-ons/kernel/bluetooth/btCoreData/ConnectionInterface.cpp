@@ -27,7 +27,7 @@ HciConnection::HciConnection(hci_id hid)
 {
 	mutex_init(&fLock, "HciConnection");
 	Hid = hid;
-	fNextIdent = L2CAP_FIRST_CID;
+	fNextIdent = L2CAP_NULL_IDENT;
 	destination_type = 0;
 	low_energy = false;
 	disconnect_hook = NULL;
@@ -143,6 +143,37 @@ RemoveConnection(uint16 handle, hci_id hid)
 }
 
 
+void
+RemoveConnections(hci_id hid)
+{
+	for (;;) {
+		HciConnection* connection = NULL;
+		{
+			MutexLocker locker(&sConnectionListLock);
+			auto iterator = sConnectionList.GetIterator();
+			while (iterator.HasNext()) {
+				HciConnection* candidate = iterator.Next();
+				if (candidate->Hid == hid) {
+					connection = candidate;
+					sConnectionList.Remove(connection);
+					break;
+				}
+			}
+		}
+
+		if (connection == NULL)
+			return;
+
+		// Endpoints must stop using the connection before its HCI device can
+		// disappear.  In particular, the L2CAP send timer may still be active.
+		DisconnectL2capEndpoints(connection);
+		if (connection->disconnect_hook != NULL)
+			connection->disconnect_hook(connection);
+		delete connection;
+	}
+}
+
+
 status_t
 DisconnectL2capEndpoints(HciConnection* conn)
 {
@@ -244,6 +275,7 @@ allocate_command_ident(HciConnection* conn, void* pointer)
 
 	while (ident != conn->fNextIdent) {
 		if (conn->fInUseIdents.Find(ident) == conn->fInUseIdents.End()) {
+			conn->fNextIdent = ident;
 			conn->fInUseIdents.Insert(ident, pointer);
 			return ident;
 		}

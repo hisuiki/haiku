@@ -110,6 +110,16 @@ l2cap_getsockopt(net_protocol* protocol, int level, int option,
 	void* value, int* _length)
 {
 	CALLED();
+	if (level == BLUETOOTH_PROTO_L2CAP) {
+		if (option != SO_L2CAP_OUTGOING_MTU)
+			return EOPNOTSUPP;
+		if (*_length < (int)sizeof(uint16))
+			return B_BAD_VALUE;
+		uint16 mtu = ((L2capEndpoint*)protocol)->OutgoingMTU();
+		memcpy(value, &mtu, sizeof(mtu));
+		*_length = sizeof(mtu);
+		return B_OK;
+	}
 	return gSocketModule->get_option(protocol->socket, level, option, value,
 		_length);
 }

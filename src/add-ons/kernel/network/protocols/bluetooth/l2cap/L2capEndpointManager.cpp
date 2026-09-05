@@ -127,17 +127,34 @@ L2capEndpointManager::GetForChannel(uint16 cid)
 void
 L2capEndpointManager::Disconnected(HciConnection* connection)
 {
-	ReadLocker _(fChannelEndpointsLock);
-	auto iter = fChannelEndpoints.GetIterator();
-	while (iter.HasNext()) {
-		L2capEndpoint* endpoint = iter.Next();
-		if (endpoint->fConnection != connection)
-			continue;
+	for (;;) {
+		L2capEndpoint* endpoint = NULL;
+		{
+			ReadLocker locker(fChannelEndpointsLock);
+			auto iter = fChannelEndpoints.GetIterator();
+			while (iter.HasNext()) {
+				L2capEndpoint* candidate = iter.Next();
+				if (candidate->fConnection == connection) {
+					endpoint = candidate;
+					gSocketModule->acquire_socket(endpoint->socket);
+					break;
+				}
+			}
+		}
 
-		endpoint->fConnection = NULL;
-		endpoint->fState = L2capEndpoint::CLOSED;
+		if (endpoint == NULL)
+			return;
 
-		endpoint->socket->error = ENOTCONN;
-		gSocketModule->notify(endpoint->socket, B_SELECT_ERROR, ENOTCONN);
+		// Do not hold the channel tree lock while taking the endpoint lock:
+		// _MarkClosed() removes this endpoint from that same tree.
+		{
+			MutexLocker locker(endpoint->fLock);
+			if (endpoint->fConnection == connection) {
+				endpoint->fConnection = NULL;
+				endpoint->fCommandWait.NotifyAll(ENOTCONN);
+				endpoint->_MarkClosed();
+			}
+		}
+		gSocketModule->release_socket(endpoint->socket);
 	}
 }

@@ -16,6 +16,7 @@
 #include <ByteOrder.h>
 #include <Drivers.h>
 #include <StackOrHeapArray.h>
+#include <util/AutoLock.h>
 
 #include <btModules.h>
 
@@ -23,6 +24,7 @@
 #include "h2cfg.h"
 #include "h2debug.h"
 #include "h2transactions.h"
+#include "h2upper.h"
 #include "h2util.h"
 #include "snet_buffer.h"
 
@@ -121,6 +123,7 @@ spawn_device(usb_device usb_dev)
 		goto exit;
 	}
 	memset(new_bt_dev, 0, sizeof(bt_usb_dev));
+	mutex_init(&new_bt_dev->aclTxLock, "bluetooth ACL transmit");
 
 	// We will need this sem for some flow control
 	new_bt_dev->cmd_complete = create_sem(1,
@@ -172,6 +175,7 @@ bail2:
 bail1:
 	delete_sem(new_bt_dev->cmd_complete);
 bail0:
+	mutex_destroy(&new_bt_dev->aclTxLock);
 	free(new_bt_dev);
 	new_bt_dev = NULL;
 exit:
@@ -188,6 +192,7 @@ kill_device(bt_usb_dev* bdev)
 
 		delete_sem(bdev->lock);
 		delete_sem(bdev->cmd_complete);
+		mutex_destroy(&bdev->aclTxLock);
 
 		// mark it free
 		bt_usb_devices[bdev->num] = NULL;
@@ -443,7 +448,7 @@ device_removed(void* cookie)
 
 static bt_hci_transport_hooks bluetooth_hooks = {
 	&submit_nbuffer, 
-	&submit_nbuffer, 
+	&queue_acl_packet,
 	&submit_nbuffer, 
 	NULL, 
 	NULL, 
@@ -466,9 +471,6 @@ submit_nbuffer(hci_id hid, net_buffer* nbuf)
 	bt_usb_dev* bdev = NULL;
 
 	bdev = fetch_device(NULL, hid);
-
-	TRACE("%s: index=%" B_PRId32 " nbuf=%p bdev=%p\n", __func__, hid,
-		nbuf, bdev);
 
 	if (bdev != NULL) {
 		switch (nbuf->protocol) {
@@ -550,6 +552,9 @@ device_open(const char* name, uint32 flags, void **cookie)
 		list_init(&bdev->nbuffersTx[i]);
 		bdev->nbuffersPendingTx[i] = 0;
 	}
+	bdev->aclTxPending = false;
+	bdev->aclTxClosing = false;
+	bdev->aclTxQueued = 0;
 
 	// RX structures
 	bdev->eventRx = NULL;
@@ -605,6 +610,10 @@ device_close(void* cookie)
 
 	if (bdev == NULL)
 		panic("bad cookie");
+	{
+		MutexLocker locker(&bdev->aclTxLock);
+		bdev->aclTxClosing = true;
+	}
 
 	// Clean queues
 
@@ -627,11 +636,17 @@ device_close(void* cookie)
 			usb->cancel_queued_transfers(bdev->iso_out_ep->handle);
 	}
 
-	// TX
+	// TX. USB cancellation completes the active ACL buffer; queued buffers
+	// remain owned by this list and are released here.
 	for (i = 0; i < BT_DRIVER_TXCOVERAGE; i++) {
 		if (i == BT_COMMAND) {
 			while ((item = list_remove_head_item(&bdev->nbuffersTx[i])) != NULL)
 				snb_free((snet_buffer*)item);
+		} else if (i == BT_ACL) {
+			MutexLocker locker(&bdev->aclTxLock);
+			while ((item = list_remove_head_item(&bdev->nbuffersTx[i])) != NULL)
+				nb_destroy((net_buffer*)item);
+			bdev->aclTxQueued = 0;
 		} else {
 			while ((item = list_remove_head_item(&bdev->nbuffersTx[i])) != NULL)
 				nb_destroy((net_buffer*)item);

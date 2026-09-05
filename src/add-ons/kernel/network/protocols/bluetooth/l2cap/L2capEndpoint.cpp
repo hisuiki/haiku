@@ -28,6 +28,14 @@ static l2cap_qos sDefaultQOS = {
 };
 
 
+uint16
+L2capEndpoint::OutgoingMTU()
+{
+	MutexLocker locker(fLock);
+	return fChannelConfig.outgoing_mtu;
+}
+
+
 static inline status_t
 posix_error(status_t error)
 {
@@ -404,7 +412,6 @@ L2capEndpoint::ReadData(size_t numBytes, uint32 flags, net_buffer** _buffer)
 status_t
 L2capEndpoint::SendData(net_buffer* buffer)
 {
-	CALLED();
 	MutexLocker locker(fLock);
 
 	if (buffer == NULL)
@@ -430,7 +437,6 @@ L2capEndpoint::SendData(net_buffer* buffer)
 status_t
 L2capEndpoint::ReceiveData(net_buffer* buffer)
 {
-	CALLED();
 	// FIXME: Check address specified in net_buffer!
 	status_t status = gStackModule->fifo_enqueue_buffer(&fReceiveQueue, buffer);
 
@@ -457,10 +463,9 @@ L2capEndpoint::_SendTimer(net_timer* timer, void* _endpoint)
 void
 L2capEndpoint::_SendQueued()
 {
-	CALLED();
 	ASSERT_LOCKED_MUTEX(&fLock);
 
-	if (fState != OPEN)
+	if (fState != OPEN || fConnection == NULL || fConnection->ndevice == NULL)
 		return;
 
 	net_buffer* buffer;
@@ -484,7 +489,6 @@ L2capEndpoint::_SendQueued()
 ssize_t
 L2capEndpoint::Sendable()
 {
-	CALLED();
 	MutexLocker locker(fLock);
 
 	if (fState != OPEN) {
@@ -501,11 +505,13 @@ L2capEndpoint::Sendable()
 ssize_t
 L2capEndpoint::Receivable()
 {
-	CALLED();
 	MutexLocker locker(fLock);
 
 	MutexLocker fifoLocker(fReceiveQueue.lock);
-	return fReceiveQueue.current_bytes;
+	ssize_t readable = fReceiveQueue.current_bytes;
+	if (readable == 0 && fState == CLOSED)
+		return ENOTCONN;
+	return readable;
 }
 
 
@@ -580,27 +586,22 @@ L2capEndpoint::_HandleConnectionReq(HciConnection* connection,
 }
 
 
-void
+bool
 L2capEndpoint::_HandleConnectionRsp(uint8 ident, const l2cap_connection_rsp& response)
 {
 	CALLED();
 	MutexLocker locker(fLock);
-	fCommandWait.NotifyAll();
 
 	if (fState != WAIT_FOR_CONNECTION_RSP) {
 		ERROR("l2cap: unexpected connection response, scid=%d, state=%d\n",
 			response.scid, fState);
-		send_l2cap_command_reject(fConnection, ident,
-			l2cap_command_reject::REJECTED_INVALID_CID, 0, response.scid, response.dcid);
-		return;
+		return false;
 	}
 
 	if (fChannelID != response.scid) {
 		ERROR("l2cap: invalid connection response, mismatched SCIDs (%d, %d)\n",
 			fChannelID, response.scid);
-		send_l2cap_command_reject(fConnection, ident,
-			l2cap_command_reject::REJECTED_INVALID_CID, 0, response.scid, response.dcid);
-		return;
+		return false;
 	}
 
 	if (response.result == l2cap_connection_rsp::RESULT_PENDING) {
@@ -608,21 +609,22 @@ L2capEndpoint::_HandleConnectionRsp(uint8 ident, const l2cap_connection_rsp& res
 		// We will receive another CONNECTION_RSP later.
 
 		// TODO: Increase/reset timeout? (We don't have any timeouts presently.)
-		return;
+		return false;
 	} else if (response.result != l2cap_connection_rsp::RESULT_SUCCESS) {
 		// Some error response.
 		// TODO: Translate `result` if possible?
+		_MarkClosed();
 		socket->error = ECONNREFUSED;
-
-		fState = CLOSED;
 		fCommandWait.NotifyAll();
+		return true;
 	}
 
 	// Success: channel is now open for configuration.
 	fState = CONFIGURATION;
 	fDestinationChannelID = response.dcid;
-
+	fCommandWait.NotifyAll();
 	_SendChannelConfig();
+	return true;
 }
 
 
@@ -861,6 +863,8 @@ L2capEndpoint::_MarkClosed()
 	fState = CLOSED;
 
 	socket->error = ENOTCONN;
+	gSocketModule->notify(socket, B_SELECT_READ, ENOTCONN);
+	gSocketModule->notify(socket, B_SELECT_WRITE, ENOTCONN);
 	gSocketModule->notify(socket, B_SELECT_ERROR, ENOTCONN);
 
 	gL2capEndpointManager.UnbindFromChannel(this);

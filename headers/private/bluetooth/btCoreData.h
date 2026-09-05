@@ -83,6 +83,7 @@ struct bluetooth_core_data_module_info {
 
 	// status_t				(*RemoveConnection)(bdaddr_t destination, hci_id hid);
 	status_t				(*RemoveConnection)(uint16 handle, hci_id hid);
+	void					(*RemoveConnections)(hci_id hid);
 
 	hci_id					(*RouteConnection)(const bdaddr_t& destination);
 

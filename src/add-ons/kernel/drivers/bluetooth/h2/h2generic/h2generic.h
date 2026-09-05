@@ -101,6 +101,10 @@ struct bt_usb_dev {
 	// in the same array
 	struct list	nbuffersTx[BT_DRIVER_TXCOVERAGE];
 	uint32		nbuffersPendingTx[BT_DRIVER_TXCOVERAGE];
+	mutex		aclTxLock;
+	bool		aclTxPending;
+	bool		aclTxClosing;
+	uint32		aclTxQueued;
 
 	// Rx buffer
 	net_buffer*		nbufferRx[BT_DRIVER_RXCOVERAGE];

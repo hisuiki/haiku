@@ -39,6 +39,7 @@ public:
 			status_t	Accept(net_socket** _acceptedSocket);
 
 			uint16		ChannelID() const { return fChannelID; }
+			uint16		OutgoingMTU();
 			uint16		DestinationChannelID() const { return fDestinationChannelID; }
 
 			ssize_t		ReadData(size_t numBytes, uint32 flags, net_buffer** _buffer);
@@ -52,7 +53,7 @@ public:
 							const l2cap_command_reject_data& data);
 			void 		_HandleConnectionReq(HciConnection* connection,
 							uint8 ident, uint16 psm, uint16 scid);
-			void		_HandleConnectionRsp(uint8 ident, const l2cap_connection_rsp& response);
+			bool		_HandleConnectionRsp(uint8 ident, const l2cap_connection_rsp& response);
 			void		_HandleConfigurationReq(uint8 ident, uint16 flags,
 							uint16* mtu, uint16* flush_timeout, l2cap_qos* flow);
 			void		_HandleConfigurationRsp(uint8 ident, uint16 scid, uint16 flags,

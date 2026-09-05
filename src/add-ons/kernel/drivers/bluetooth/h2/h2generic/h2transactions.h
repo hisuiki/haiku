@@ -19,6 +19,12 @@ status_t submit_tx_acl(bt_usb_dev* bdev, net_buffer* nbuf);
 status_t submit_tx_sco(bt_usb_dev* bdev, net_buffer* nbuf);
 
 typedef struct {
+	bt_usb_dev* bdev;
+	net_buffer* nbuf;
+	void* data;
+} acl_tx_transfer_t;
+
+typedef struct {
     bt_usb_dev* bdev;
     net_buffer* nbuf;
     usb_iso_packet_descriptor* packet_descriptors;

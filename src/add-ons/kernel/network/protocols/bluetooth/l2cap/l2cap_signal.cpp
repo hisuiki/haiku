@@ -61,8 +61,15 @@ l2cap_handle_connection_req(HciConnection* conn, uint8 ident, net_buffer* buffer
 
 
 static void
-l2cap_handle_connection_rsp(L2capEndpoint* endpoint, uint8 ident, net_buffer* buffer)
+l2cap_handle_connection_rsp(L2capEndpoint* endpoint, uint8 ident,
+	net_buffer* buffer, bool& releaseIdent)
 {
+	if (endpoint == NULL) {
+		ERROR("l2cap: unexpected connection response: ident %d unknown\n",
+			ident);
+		return;
+	}
+
 	NetBufferHeaderReader<l2cap_connection_rsp> command(buffer);
 	if (command.Status() != B_OK)
 		return;
@@ -76,7 +83,7 @@ l2cap_handle_connection_rsp(L2capEndpoint* endpoint, uint8 ident, net_buffer* bu
 	TRACE("%s: dcid=%d scid=%d result=%d status%d\n",
 		__func__, response.dcid, response.scid, response.result, response.status);
 
-	endpoint->_HandleConnectionRsp(ident, response);
+	releaseIdent = endpoint->_HandleConnectionRsp(ident, response);
 }
 
 
@@ -240,6 +247,12 @@ l2cap_handle_disconnection_req(HciConnection* conn, uint8 ident, net_buffer* buf
 static status_t
 l2cap_handle_disconnection_rsp(L2capEndpoint* endpoint, uint8 ident, net_buffer* buffer)
 {
+	if (endpoint == NULL) {
+		ERROR("l2cap: unexpected disconnection response: ident %d unknown\n",
+			ident);
+		return B_ERROR;
+	}
+
 	NetBufferHeaderReader<l2cap_disconnection_rsp> command(buffer);
 	if (command.Status() != B_OK)
 		return ENOBUFS;
@@ -550,7 +563,8 @@ l2cap_handle_signaling_command(HciConnection* connection, net_buffer* buffer)
 				break;
 
 			case L2CAP_CONNECTION_RSP:
-				l2cap_handle_connection_rsp(endpoint, ident, buffer);
+				l2cap_handle_connection_rsp(endpoint, ident, buffer,
+					releaseIdent);
 				break;
 
 			case L2CAP_CONFIGURATION_REQ:

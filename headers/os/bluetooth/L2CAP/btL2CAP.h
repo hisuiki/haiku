@@ -8,6 +8,10 @@
 
 #include <bluetooth/bluetooth.h>
 
+// Read-only socket option at level BLUETOOTH_PROTO_L2CAP. The value is a
+// host-endian uint16 containing the peer's negotiated receive MTU.
+#define SO_L2CAP_OUTGOING_MTU 1
+
 struct sockaddr_l2cap {
 	uint8		l2cap_len;		/* total length */
 	uint8		l2cap_family;	/* address family */

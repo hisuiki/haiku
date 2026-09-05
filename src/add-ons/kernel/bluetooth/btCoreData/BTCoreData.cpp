@@ -108,8 +108,8 @@ PostEvent(bluetooth_device* ndev, void* event, size_t size)
 				(outgoingEvent + 1);
 
 			RemoveConnection(data->handle, ndev->index);
-			TRACE("%s: unRegistered connection handle=%#x\n", __func__,
-				data->handle);
+			TRACE("%s: unRegistered connection handle=%#x status=%#x reason=%#x\n",
+				__func__, data->handle, data->status, data->reason);
 			break;
 		}
 
@@ -117,10 +117,27 @@ PostEvent(bluetooth_device* ndev, void* event, size_t size)
 		{
 			struct hci_ev_cmd_complete* complete
 				= (struct hci_ev_cmd_complete*)(outgoingEvent + 1);
+			uint16 opcode = B_LENDIAN_TO_HOST_INT16(complete->opcode);
 
-			if (B_LENDIAN_TO_HOST_INT16(complete->opcode)
-					!= PACK_OPCODE(OGF_INFORMATIONAL_PARAM,
-						OCF_READ_BD_ADDR)) {
+			if (opcode == PACK_OPCODE(OGF_INFORMATIONAL_PARAM,
+					OCF_READ_BUFFER_SIZE)) {
+				if (size < sizeof(hci_event_header) + sizeof(hci_ev_cmd_complete)
+						+ sizeof(hci_rp_read_buffer_size))
+					break;
+				struct hci_rp_read_buffer_size* reply
+					= (struct hci_rp_read_buffer_size*)(complete + 1);
+				uint16 mtu = B_LENDIAN_TO_HOST_INT16(reply->acl_mtu);
+				if (reply->status == BT_OK && mtu != 0) {
+					ndev->mtu = min_c(mtu, HCI_MAX_ACL_SIZE);
+					TRACE("%s: controller ACL MTU is %u (%u packets)\n",
+						__func__, ndev->mtu,
+						B_LENDIAN_TO_HOST_INT16(reply->acl_max_pkt));
+				}
+				break;
+			}
+
+			if (opcode != PACK_OPCODE(OGF_INFORMATIONAL_PARAM,
+					OCF_READ_BD_ADDR)) {
 				break;
 			}
 
@@ -193,6 +210,7 @@ bluetooth_core_data_module_info sBCDModule = {
 	AddConnection,
 	// RemoveConnection,
 	RemoveConnection,
+	RemoveConnections,
 
 	RouteConnection,
 
