@@ -15,6 +15,11 @@
 #define L2CAP_NULL_CID		0x0000
 #define L2CAP_SIGNALING_CID	0x0001
 #define L2CAP_CONNECTIONLESS_CID 0x0002
+/* Fixed channels of a Low Energy link. Unlike BR/EDR, these are never
+   negotiated: they exist for the lifetime of the connection. */
+#define L2CAP_ATT_CID		0x0004
+#define L2CAP_LE_SIGNALING_CID	0x0005
+#define L2CAP_SMP_CID		0x0006
 	/* 0x0003-0x003f: reserved */
 #define L2CAP_FIRST_CID		0x0040
 #define L2CAP_LAST_CID		0xffff
@@ -204,6 +209,26 @@ typedef l2cap_disconnection_req l2cap_disconnection_rsp;
 
 #define L2CAP_MAX_ECHO_SIZE \
 	(L2CAP_MTU_MAXIMUM - sizeof(l2cap_command_header))
+
+
+/* Low Energy signalling. A peripheral asks the central to adopt the connection
+   parameters it prefers; leaving it unanswered stalls it for the whole request
+   timeout. */
+#define L2CAP_CONNECTION_PARAMETER_UPDATE_REQ	0x12
+typedef struct {
+	uint16	min_interval;
+	uint16	max_interval;
+	uint16	latency;
+	uint16	supervision_timeout;
+} _PACKED l2cap_connection_parameter_update_req;
+
+#define L2CAP_CONNECTION_PARAMETER_UPDATE_RSP	0x13
+typedef struct {
+	enum : uint16 {
+		RESULT_ACCEPTED	= 0x0000,
+		RESULT_REJECTED	= 0x0001,
+	}; uint16 result;
+} _PACKED l2cap_connection_parameter_update_rsp;
 
 
 #define L2CAP_INFORMATION_REQ	0x0a

@@ -36,6 +36,24 @@ make_l2cap_command_reject(uint8& code, uint16 reason, uint16 mtu, uint16 scid, u
 
 
 net_buffer*
+make_l2cap_connection_parameter_update_rsp(uint8& code, uint16 result)
+{
+	NetBufferDeleter<> buffer(gBufferModule->create(128));
+	if (!buffer.IsSet())
+		return NULL;
+
+	NetBufferPrepend<l2cap_connection_parameter_update_rsp> command(buffer.Get());
+	if (command.Status() != B_OK)
+		return NULL;
+
+	code = L2CAP_CONNECTION_PARAMETER_UPDATE_RSP;
+	command->result = htole16(result);
+
+	return buffer.Detach();
+}
+
+
+net_buffer*
 make_l2cap_connection_req(uint8& code, uint16 psm, uint16 scid)
 {
 	NetBufferDeleter<> buffer(gBufferModule->create(128));

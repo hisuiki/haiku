@@ -32,6 +32,8 @@ net_buffer*	make_l2cap_configuration_rsp(uint8& code, uint16 scid, uint16 flags,
 net_buffer*	make_l2cap_disconnection_req(uint8& code, uint16 dcid, uint16 scid);
 net_buffer*	make_l2cap_disconnection_rsp(uint8& code, uint16 dcid, uint16 scid);
 
+net_buffer*	make_l2cap_connection_parameter_update_rsp(uint8& code, uint16 result);
+
 net_buffer*	make_l2cap_information_req(uint8& code, uint16 type);
 net_buffer*	make_l2cap_information_rsp(uint8& code, uint16 type, uint16 result, uint16 mtu);
 

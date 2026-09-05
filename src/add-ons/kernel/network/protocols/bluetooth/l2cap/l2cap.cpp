@@ -14,6 +14,8 @@
 #include "l2cap_command.h"
 #include "l2cap_internal.h"
 #include "l2cap_signal.h"
+#include "att.h"
+#include "smp.h"
 #include "L2capEndpoint.h"
 #include "L2capEndpointManager.h"
 
@@ -220,6 +222,18 @@ connection_for(net_buffer* buffer)
 }
 
 
+/*!	Installed on every Low Energy link. Without it a button or key held when
+	the link drops is never released, and whatever was tracking it goes on
+	waiting for an up that cannot arrive.
+*/
+static void
+le_connection_closed(HciConnection* connection)
+{
+	smp_connection_closed(connection);
+	att_connection_closed(connection);
+}
+
+
 status_t
 l2cap_receive_data(net_buffer* buffer)
 {
@@ -259,6 +273,55 @@ l2cap_receive_data(net_buffer* buffer)
 			}
 
 			status = l2cap_handle_signaling_command(connection, buffer);
+			break;
+		}
+
+		case L2CAP_LE_SIGNALING_CID:
+		{
+			struct HciConnection* connection = connection_for(buffer);
+			if (connection == NULL) {
+				ERROR("%s: no connection for LE signal\n", __func__);
+				gBufferModule->free(buffer);
+				return ENOTCONN;
+			}
+
+			status = handle_le_signaling_command(connection, buffer);
+
+			// So that a button or key held when the link drops is released.
+			connection->disconnect_hook = &le_connection_closed;
+
+			// Resume the bond if this peripheral has one, otherwise offer to
+			// pair. Both calls refuse to start twice, so reaching them again
+			// is safe.
+			smp_link_established(connection);
+			att_start_discovery(connection);
+			break;
+		}
+
+		case L2CAP_SMP_CID:
+		{
+			struct HciConnection* connection = connection_for(buffer);
+			if (connection == NULL) {
+				ERROR("%s: no connection for Security Manager packet\n",
+					__func__);
+				gBufferModule->free(buffer);
+				return ENOTCONN;
+			}
+
+			status = smp_receive(connection, buffer);
+			break;
+		}
+
+		case L2CAP_ATT_CID:
+		{
+			struct HciConnection* connection = connection_for(buffer);
+			if (connection == NULL) {
+				ERROR("%s: no connection for attribute packet\n", __func__);
+				gBufferModule->free(buffer);
+				return ENOTCONN;
+			}
+
+			status = att_receive(connection, buffer);
 			break;
 		}
 

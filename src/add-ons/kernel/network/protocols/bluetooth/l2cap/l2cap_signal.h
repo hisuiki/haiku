@@ -9,9 +9,12 @@
 
 
 status_t l2cap_handle_signaling_command(struct HciConnection* connection, net_buffer* buffer);
+status_t handle_le_signaling_command(struct HciConnection* connection, net_buffer* buffer);
 
 
 status_t send_l2cap_command(HciConnection* conn, uint8 code, uint8 ident, net_buffer* command);
+status_t send_l2cap_command_on_channel(HciConnection* conn, uint8 code, uint8 ident,
+	net_buffer* command, uint16 cid);
 
 status_t send_l2cap_command_reject(HciConnection* conn, uint8 ident,
 	uint16 reason, uint16 mtu, uint16 scid, uint16 dcid);

@@ -337,7 +337,8 @@ l2cap_handle_command_reject(L2capEndpoint* endpoint, uint8 ident, net_buffer* bu
 
 
 status_t
-send_l2cap_command(HciConnection* conn, uint8 code, uint8 ident, net_buffer* command)
+send_l2cap_command_on_channel(HciConnection* conn, uint8 code, uint8 ident,
+	net_buffer* command, uint16 cid)
 {
 	// TODO: Command timeouts (probably in L2capEndpoint.)
 	{
@@ -348,13 +349,64 @@ send_l2cap_command(HciConnection* conn, uint8 code, uint8 ident, net_buffer* com
 	} {
 		NetBufferPrepend<l2cap_basic_header> basicHeader(command);
 		basicHeader->length = htole16(command->size - sizeof(l2cap_basic_header));
-		basicHeader->dcid = htole16(L2CAP_SIGNALING_CID);
+		basicHeader->dcid = htole16(cid);
 	}
 	command->type = conn->handle;
 	status_t status = btDevices->PostACL(conn->Hid, command);
 	if (status != B_OK)
 		gBufferModule->free(command);
 	return status;
+}
+
+
+status_t
+send_l2cap_command(HciConnection* conn, uint8 code, uint8 ident,
+	net_buffer* command)
+{
+	return send_l2cap_command_on_channel(conn, code, ident, command,
+		L2CAP_SIGNALING_CID);
+}
+
+
+/*!	A Low Energy peripheral asks the central to adopt the connection parameters
+	it prefers. Accepting keeps it from re-asking until its request times out;
+	the parameters requested at connect time are already suitable for an input
+	device, so nothing else is renegotiated here.
+*/
+status_t
+handle_le_signaling_command(HciConnection* conn, net_buffer* buffer)
+{
+	uint8 code;
+	uint8 ident;
+	{
+		// Scoped, so the buffer is not freed under a live reader.
+		NetBufferHeaderReader<l2cap_command_header> command(buffer);
+		if (command.Status() != B_OK) {
+			gBufferModule->free(buffer);
+			return ENOBUFS;
+		}
+
+		code = command->code;
+		ident = command->ident;
+		command.Remove();
+	}
+
+	if (code != L2CAP_CONNECTION_PARAMETER_UPDATE_REQ) {
+		TRACE("%s: unhandled LE signal 0x%x\n", __func__, code);
+		gBufferModule->free(buffer);
+		return B_OK;
+	}
+
+	gBufferModule->free(buffer);
+
+	uint8 replyCode = 0;
+	net_buffer* reply = make_l2cap_connection_parameter_update_rsp(replyCode,
+		l2cap_connection_parameter_update_rsp::RESULT_ACCEPTED);
+	if (reply == NULL)
+		return ENOMEM;
+
+	return send_l2cap_command_on_channel(conn, replyCode, ident, reply,
+		L2CAP_LE_SIGNALING_CID);
 }
 
 

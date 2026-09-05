@@ -4,6 +4,10 @@ UsePrivateKernelHeaders ;
 UsePrivateHeaders net bluetooth ;
 
 KernelAddon l2cap :
+	aes.cpp
+	att.cpp
+	smp.cpp
+	smp_crypto.cpp
 	l2cap.cpp
 	l2cap_command.cpp
 	l2cap_signal.cpp
