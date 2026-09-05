@@ -77,6 +77,8 @@ protected:
 
 private:
 
+	BString			_BestKnownName();
+
 	LocalDevice* 	fDiscovererLocalDevice;
 	BMessenger*	 	fMessenger;
 
@@ -87,6 +89,15 @@ private:
 	int8        	fRSSI;
 	BString     	fFriendlyName;
 	bool        	fFriendlyNameIsComplete;
+	// A Low Energy peripheral cannot be paged, so it never gets a Remote Name
+	// Request. Whatever name it has arrived in its advertising data.
+	bool        	fLowEnergy;
+	// LE_PUBLIC_ADDRESS or LE_RANDOM_ADDRESS. A random address is only
+	// meaningful together with fLowEnergy.
+	uint8       	fAddressType;
+	// Set once a name request came back empty handed, so that redrawing a list
+	// does not page an unreachable device over and over.
+	bool        	fNameRequestFailed;
 };
 
 }

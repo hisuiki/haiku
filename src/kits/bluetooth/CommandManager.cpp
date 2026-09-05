@@ -155,6 +155,93 @@ buildRemoteNameRequest(bdaddr_t bdaddr, uint8 pscan_rep_mode,
 
 
 void*
+buildSetEventMask(uint64 mask, size_t* outsize)
+{
+	CALLED();
+	struct hci_cp_set_event_mask* param;
+	void* command = buildCommand(OGF_CONTROL_BASEBAND, OCF_SET_EVENT_MASK,
+		(void**)&param, sizeof(struct hci_cp_set_event_mask), outsize);
+
+	if (command != NULL) {
+		for (int i = 0; i < 8; i++)
+			param->mask[i] = (mask >> (8 * i)) & 0xFF;
+	}
+
+	return command;
+}
+
+
+void*
+buildWriteInquiryMode(uint8 mode, size_t* outsize)
+{
+	CALLED();
+	struct hci_cp_write_inquiry_mode* param;
+	void* command = buildCommand(OGF_CONTROL_BASEBAND, OCF_WRITE_INQUIRY_MODE,
+		(void**)&param, sizeof(struct hci_cp_write_inquiry_mode), outsize);
+
+	if (command != NULL)
+		param->mode = mode;
+
+	return command;
+}
+
+
+void*
+buildLeSetEventMask(uint64 mask, size_t* outsize)
+{
+	CALLED();
+	struct hci_cp_le_set_event_mask* param;
+	void* command = buildCommand(OGF_LE_CONTROL, OCF_LE_SET_EVENT_MASK,
+		(void**)&param, sizeof(struct hci_cp_le_set_event_mask), outsize);
+
+	if (command != NULL) {
+		for (int i = 0; i < 8; i++)
+			param->mask[i] = (mask >> (8 * i)) & 0xFF;
+	}
+
+	return command;
+}
+
+
+void*
+buildLeSetScanParameters(uint8 type, uint16 interval, uint16 window,
+	uint8 ownAddressType, uint8 filterPolicy, size_t* outsize)
+{
+	CALLED();
+	struct hci_cp_le_set_scan_parameters* param;
+	void* command = buildCommand(OGF_LE_CONTROL, OCF_LE_SET_SCAN_PARAMETERS,
+		(void**)&param, sizeof(struct hci_cp_le_set_scan_parameters), outsize);
+
+	if (command != NULL) {
+		param->type = type;
+		param->interval = B_HOST_TO_LENDIAN_INT16(interval);
+		param->window = B_HOST_TO_LENDIAN_INT16(window);
+		param->own_address_type = ownAddressType;
+		param->filter_policy = filterPolicy;
+	}
+
+	return command;
+}
+
+
+void*
+buildLeSetScanEnable(bool enable, bool filterDuplicates, size_t* outsize)
+{
+	CALLED();
+	struct hci_cp_le_set_scan_enable* param;
+	void* command = buildCommand(OGF_LE_CONTROL, OCF_LE_SET_SCAN_ENABLE,
+		(void**)&param, sizeof(struct hci_cp_le_set_scan_enable), outsize);
+
+	if (command != NULL) {
+		param->enable = enable ? 1 : 0;
+		param->filter_duplicates = filterDuplicates ? 1 : 0;
+	}
+
+	return command;
+}
+
+
+void*
 buildInquiry(uint32 lap, uint8 length, uint8 num_rsp, size_t* outsize)
 {
 	CALLED();

@@ -8,6 +8,8 @@
 #include <bluetooth/bdaddrUtils.h>
 #include <bluetooth/bluetooth_error.h>
 #include <bluetooth/HCI/btHCI_transport.h>
+#include <bluetooth/HCI/btHCI_acl.h>
+#include <bluetooth/HCI/btHCI_command.h>
 #include <bluetooth/HCI/btHCI_event.h>
 
 #define BT_DEBUG_THIS_MODULE
@@ -64,6 +66,40 @@ PostEvent(bluetooth_device* ndev, void* event, size_t size)
 			break;
 		}
 
+		case HCI_EVENT_LE_META:
+		{
+			struct hci_ev_le_meta* meta
+				= (struct hci_ev_le_meta*)(outgoingEvent + 1);
+
+			// The enhanced completion repeats every field of the plain one in
+			// the same order up to the address, which is all that matters
+			// here, so one cast serves both.
+			if (meta->subevent != HCI_EV_LE_CONN_COMPLETE
+				&& meta->subevent != HCI_EV_LE_ENHANCED_CONN_COMPLETE) {
+				break;
+			}
+
+			struct hci_ev_le_conn_complete* data
+				= (struct hci_ev_le_conn_complete*)(meta + 1);
+
+			if (data->status != BT_OK)
+				break;
+
+			// Without this the ACL layer meets an unknown handle and invents a
+			// connection with no address, which no L2CAP endpoint can match.
+			HciConnection* conn = AddConnection(get_acl_handle(data->handle),
+				BT_ACL, data->bdaddr, ndev->index);
+
+			if (conn == NULL)
+				panic("no mem for conn desc");
+			conn->ndevice = ndev;
+			conn->destination_type = data->bdaddr_type;
+			conn->low_energy = true;
+			TRACE("%s: Registered LE connection handle=%#x type=%d\n",
+				__func__, get_acl_handle(data->handle), data->bdaddr_type);
+			break;
+		}
+
 		case HCI_EVENT_DISCONNECTION_COMPLETE:
 		{
 			struct hci_ev_disconnection_complete_reply* data;
@@ -74,6 +110,30 @@ PostEvent(bluetooth_device* ndev, void* event, size_t size)
 			RemoveConnection(data->handle, ndev->index);
 			TRACE("%s: unRegistered connection handle=%#x\n", __func__,
 				data->handle);
+			break;
+		}
+
+		case HCI_EVENT_CMD_COMPLETE:
+		{
+			struct hci_ev_cmd_complete* complete
+				= (struct hci_ev_cmd_complete*)(outgoingEvent + 1);
+
+			if (B_LENDIAN_TO_HOST_INT16(complete->opcode)
+					!= PACK_OPCODE(OGF_INFORMATIONAL_PARAM,
+						OCF_READ_BD_ADDR)) {
+				break;
+			}
+
+			struct hci_rp_read_bd_addr* reply
+				= (struct hci_rp_read_bd_addr*)(complete + 1);
+			if (reply->status != BT_OK)
+				break;
+
+			ndev->localAddress = reply->bdaddr;
+			TRACE("%s: local address is "
+				"%2.2X:%2.2X:%2.2X:%2.2X:%2.2X:%2.2X\n", __func__,
+				reply->bdaddr.b[5], reply->bdaddr.b[4], reply->bdaddr.b[3],
+				reply->bdaddr.b[2], reply->bdaddr.b[1], reply->bdaddr.b[0]);
 			break;
 		}
 

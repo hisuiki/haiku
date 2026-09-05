@@ -37,12 +37,10 @@ private:
 	BTextView*				fMessage;
 	BListView*				fRemoteList;
 	BScrollView*			fScrollView;
-	BMessage*				fRetrieveMessage;
 	BMessage*				fSecondsMessage;
 	BMessenger				fMessenger;
 
 	bool					fScanning;
-	bool					fRetrieving;
 	Bluetooth::LocalDevice*	fLocalDevice;
 	Bluetooth::DiscoveryAgent* fDiscoveryAgent;
 	Bluetooth::DiscoveryListener* fDiscoveryListener;

@@ -38,7 +38,8 @@ DeviceListItem::SetDevice(RemoteDevice* bDevice)
 {
 	fAddress = bDevice->GetBluetoothAddress();
 	fClass = bDevice->GetDeviceClass();
-	fName = bDevice->GetFriendlyName();
+	// Never the asking variant: this runs on the thread drawing the window.
+	fName = bDevice->GetCachedFriendlyName();
 	// AKAIR rssi we can just have it @ inquiry time...
 }
 

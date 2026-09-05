@@ -109,12 +109,21 @@ DiscoveryListener::MessageReceived(BMessage* message)
 
 				message->FindString("friendly_name", i, &friendlyName);
 
+				// Low Energy peripherals answer no Remote Name Request, so the
+				// name they advertised is the only one there will ever be.
+				bool lowEnergy = false;
+				message->FindBool("low_energy", i, &lowEnergy);
+				uint8 addressType = LE_PUBLIC_ADDRESS;
+				message->FindUInt8("bdaddr_type", i, &addressType);
+
 				// Skip duplicated replies
 				bool duplicatedFound = false;
 				for (int32 index = 0; index < fRemoteDevicesList.CountItems(); index++) {
 					RemoteDevice* existingDevice = fRemoteDevicesList.ItemAt(index);
 					bdaddr_t b1 = existingDevice->GetBluetoothAddress();
 					if (bdaddrUtils::Compare(*bdaddr, b1)) {
+						bool wasUnnamed = existingDevice->fFriendlyName.IsEmpty();
+
 						// update these values
 						existingDevice->fPageRepetitionMode = pageRepetitionMode;
 						existingDevice->fScanPeriodMode = scanPeriodMode;
@@ -125,7 +134,18 @@ DiscoveryListener::MessageReceived(BMessage* message)
 							existingDevice->fFriendlyNameIsComplete = friendlyNameIsComplete;
 							existingDevice->fFriendlyName = friendlyName;
 						}
+						existingDevice->fLowEnergy = lowEnergy;
+						existingDevice->fAddressType = addressType;
 						duplicatedFound = true;
+
+						// A peripheral commonly advertises before it answers
+						// with its name, so this repeat report is the first
+						// moment the device is worth showing.
+						if (wasUnnamed
+							&& !existingDevice->fFriendlyName.IsEmpty()) {
+							DeviceDiscovered(existingDevice,
+								existingDevice->GetDeviceClass());
+						}
 						break;
 					}
 				}
@@ -142,7 +162,14 @@ DiscoveryListener::MessageReceived(BMessage* message)
 					rd->fRSSI = rssi;
 					rd->fFriendlyNameIsComplete = friendlyNameIsComplete;
 					rd->fFriendlyName = friendlyName;
-					DeviceDiscovered(rd, rd->GetDeviceClass());
+					rd->fLowEnergy = lowEnergy;
+					rd->fAddressType = addressType;
+
+					// Report it only once its name is known. A device is
+					// tracked either way, so a later report that carries the
+					// name will announce it then.
+					if (!rd->fFriendlyName.IsEmpty())
+						DeviceDiscovered(rd, rd->GetDeviceClass());
 				}
 			}
 			break;

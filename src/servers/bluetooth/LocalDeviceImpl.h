@@ -29,6 +29,8 @@ struct ServerRemoteDevice
 	uint8				classOfDevice[3];
 	linkkey_t			link_key;
 	uint8				link_type;
+	bool				low_energy;
+	uint8				bdaddr_type;
 	uint8				encryption_enabled;
 
 	uint16				handle;
@@ -91,7 +93,14 @@ private:
 	void InquiryResult(uint8* numberOfResponses, BMessage* request);
 	void InquiryResultWithRSSI(uint8* numberOfResponses, BMessage* request);
 	void ExtendedInquiryResult(uint8* numberOfResponses, BMessage* request);
-	void ParseEIR(const uint8* eir, BMessage& reply);
+	void LeMetaEvent(struct hci_ev_le_meta* event, uint8 length,
+		BMessage* request);
+	void LeAdvertisingReport(const uint8* data, uint8 length,
+		BMessage* request);
+	void LeConnectionComplete(struct hci_ev_le_conn_complete* event,
+		BMessage* request);
+	void _CreateLeConnection(ServerRemoteDevice* device);
+	void ParseEIR(const uint8* eir, size_t length, BMessage& reply);
 	void InquiryComplete(uint8* status, BMessage* request);
 	void RemoteNameRequestComplete(struct hci_ev_remote_name_request_complete_reply*
 		remotename, BMessage* request);

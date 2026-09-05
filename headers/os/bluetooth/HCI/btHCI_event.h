@@ -298,7 +298,72 @@ struct hci_ev_extended_inquiry_info {
 #define EIR_NAME_COMPLETE 0x09
 #define EIR_TX_POWER 0x0A
 #define EIR_CLASS_OF_DEVICE 0x0D
+#define EIR_APPEARANCE 0x19
 #define EIR_MANUFACTURER_DATA 0xFF
+
+/* Advertising data uses exactly the same type/length structure as EIR, so the
+   EIR_* values above apply to Low Energy advertising reports as well. */
+
+#define HCI_EVENT_LE_META							0x3E
+struct hci_ev_le_meta {
+	uint8		subevent;
+} __attribute__ ((packed));
+
+	/* LE address types */
+	#define LE_PUBLIC_ADDRESS						0x00
+	#define LE_RANDOM_ADDRESS						0x01
+
+	#define HCI_EV_LE_CONN_COMPLETE					0x01
+	struct hci_ev_le_conn_complete {
+		uint8		status;
+		uint16		handle;
+		uint8		role;
+		uint8		bdaddr_type;
+		bdaddr_t	bdaddr;
+		uint16		interval;
+		uint16		latency;
+		uint16		supervision_timeout;
+		uint8		master_clock_accuracy;
+	} __attribute__ ((packed));
+
+	#define HCI_EV_LE_ADVERTISING_REPORT			0x02
+	/* Advertising event types */
+	#define LE_ADV_IND								0x00
+	#define LE_ADV_DIRECT_IND						0x01
+	#define LE_ADV_SCAN_IND							0x02
+	#define LE_ADV_NONCONN_IND						0x03
+	#define LE_ADV_SCAN_RSP							0x04
+	/* The reports are concatenated, each one followed by its own RSSI byte. */
+	struct hci_ev_le_advertising_info {
+		uint8		evt_type;
+		uint8		bdaddr_type;
+		bdaddr_t	bdaddr;
+		uint8		length;
+		uint8		data[0];
+	} __attribute__ ((packed));
+
+	#define HCI_EV_LE_CONN_UPDATE_COMPLETE			0x03
+	#define HCI_EV_LE_READ_REMOTE_FEATURES_COMPLETE	0x04
+	#define HCI_EV_LE_LONG_TERM_KEY_REQUEST			0x05
+
+	/* Controllers that support privacy report this in place of the plain
+	   connection complete above. It repeats every field of it in the same
+	   order up to and including the address, then adds the resolvable private
+	   addresses of both sides. */
+	#define HCI_EV_LE_ENHANCED_CONN_COMPLETE		0x0A
+	struct hci_ev_le_enhanced_conn_complete {
+		uint8		status;
+		uint16		handle;
+		uint8		role;
+		uint8		bdaddr_type;
+		bdaddr_t	bdaddr;
+		bdaddr_t	local_resolvable_address;
+		bdaddr_t	peer_resolvable_address;
+		uint16		interval;
+		uint16		latency;
+		uint16		supervision_timeout;
+		uint8		master_clock_accuracy;
+	} __attribute__ ((packed));
 
 #define HCI_EVENT_ENCRYPTION_KEY_REFRESH_COMPLETE	0x30
 

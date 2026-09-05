@@ -103,6 +103,8 @@ SingleParameterCommandRequest(uint8 ofg, uint8 ocf, PARAMETERTYPE parameter,
 
 
 /* CONTROL BASEBAND */
+void* buildSetEventMask(uint64 mask, size_t* outsize);
+void* buildWriteInquiryMode(uint8 mode, size_t* outsize);
 void* buildReset(size_t* outsize);
 void* buildReadLocalName(size_t* outsize);
 void* buildReadScan(size_t* outsize);
@@ -124,6 +126,13 @@ void* buildIOCapabilityRequestReply(bdaddr_t bdaddr, uint8 capability, uint8 oob
 	uint8 authentication, size_t* outsize);
 void* buildUserConfirmReply(bdaddr_t bdaddr, size_t* outsize);
 void* buildAuthenticationRequested(uint16 handle, size_t* outsize);
+
+/* LE CONTROL */
+void* buildLeSetEventMask(uint64 mask, size_t* outsize);
+void* buildLeSetScanParameters(uint8 type, uint16 interval, uint16 window,
+	uint8 ownAddressType, uint8 filterPolicy, size_t* outsize);
+void* buildLeSetScanEnable(bool enable, bool filterDuplicates,
+	size_t* outsize);
 
 /* OGF_INFORMATIONAL_PARAM */
 void* buildReadLocalVersionInformation(size_t* outsize);

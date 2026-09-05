@@ -6,6 +6,7 @@
 #define _BTHCI_TRANSPORT_H_
 
 
+#include <bluetooth/bluetooth.h>
 #include <bluetooth/HCI/btHCI.h>
 
 #include <Drivers.h>
@@ -130,6 +131,10 @@ struct bluetooth_device : DoublyLinkedListLinkImpl<bluetooth_device> {
 	bt_hci_device_information*	info;
 	bt_hci_transport_hooks*		hooks;
 	uint16						mtu;
+
+	// Learned by watching the reply to Read BD_ADDR. The Security Manager
+	// needs it to compute the pairing confirm value.
+	bdaddr_t					localAddress;
 
 };
 #else

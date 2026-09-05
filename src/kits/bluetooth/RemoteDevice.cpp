@@ -94,14 +94,48 @@ RemoteDevice::ParseRemoteDevice(LocalDevice* localDevice, BMessage* message)
 }
 
 
+// Paging a device that is not listening takes the page timeout, 5.12 seconds
+// by default, and this happens on the thread drawing the window.
+static const bigtime_t kNameRequestTimeout = 10000000;
+
+
+/*!	Falls back to the address, which at least identifies the device, rather
+	than to a placeholder that says nothing.
+*/
+BString
+RemoteDevice::_BestKnownName()
+{
+	if (!fFriendlyName.IsEmpty())
+		return fFriendlyName;
+
+	return bdaddrUtils::ToString(fBdaddr);
+}
+
+
 BString
 RemoteDevice::GetFriendlyName(bool alwaysAsk)
 {
 	CALLED();
-	if (!alwaysAsk) {
-		if (!fFriendlyName.IsEmpty() && fFriendlyNameIsComplete)
-			return fFriendlyName;
-	}
+
+	if (!fFriendlyName.IsEmpty() && fFriendlyNameIsComplete)
+		return fFriendlyName;
+
+	// Only an explicit request pages the device. Discovery already fills the
+	// name in from the inquiry response or the advertising data, and when it
+	// did not, showing the address beats stalling the caller - which is the
+	// thread drawing the window - on a page that may never be answered.
+	if (!alwaysAsk)
+		return _BestKnownName();
+
+	// A Low Energy peripheral cannot be paged at all, so there is nothing to
+	// ask even when the caller insists.
+	if (fLowEnergy)
+		return _BestKnownName();
+
+	// Asking again costs another page timeout and would almost certainly fail
+	// the same way.
+	if (fNameRequestFailed)
+		return _BestKnownName();
 
 	if (fDiscovererLocalDevice == NULL)
 		return BString(B_TRANSLATE("#NoOwnerError#Not Valid name"));
@@ -131,7 +165,10 @@ RemoteDevice::GetFriendlyName(bool alwaysAsk)
 	request.AddInt16("eventExpected",  HCI_EVENT_REMOTE_NAME_REQUEST_COMPLETE);
 
 
-	if (fMessenger->SendMessage(&request, &reply) == B_OK) {
+	// A device that has gone away answers nothing at all, and this runs on the
+	// thread drawing the window.
+	if (fMessenger->SendMessage(&request, &reply, kNameRequestTimeout,
+			kNameRequestTimeout) == B_OK) {
 		BString name;
 		uint8 status;
 
@@ -142,19 +179,19 @@ RemoteDevice::GetFriendlyName(bool alwaysAsk)
 				fFriendlyNameIsComplete = true;
 				return name;
 			} else {
-				return BString(""); // should not happen
+				fNameRequestFailed = true;
+				return _BestKnownName();
 			}
 
 		} else {
 			// seems we got a negative event
-			if (!fFriendlyName.IsEmpty())
-				return fFriendlyName;
-
-			return BString(B_TRANSLATE("#CommandFailed#Not Valid name"));
+			fNameRequestFailed = true;
+			return _BestKnownName();
 		}
 	}
 
-	return BString(B_TRANSLATE("#NotCompletedRequest#Not Valid name"));
+	fNameRequestFailed = true;
+	return _BestKnownName();
 }
 
 
@@ -229,6 +266,11 @@ RemoteDevice::Connect()
 	uint8 roleSwitch;
 	fDiscovererLocalDevice->GetProperty("role_switch_capable", (uint32*)&roleSwitch);
 	request.AddUInt8("role_switch", roleSwitch);
+
+	// A Low Energy peripheral needs an entirely different connect command, and
+	// its address type is part of how it is reached.
+	request.AddBool("low_energy", fLowEnergy);
+	request.AddUInt8("bdaddr_type", fAddressType);
 
 	if (fMessenger->SendMessage(&request) == B_OK)
 		return B_OK;
@@ -330,7 +372,11 @@ RemoteDevice::RemoteDevice(const bdaddr_t address, uint8 record[3])
 	:
 	BluetoothDevice(),
 	fDiscovererLocalDevice(NULL),
-	fScanMode(0)
+	fScanMode(0),
+	fFriendlyNameIsComplete(false),
+	fLowEnergy(false),
+	fAddressType(LE_PUBLIC_ADDRESS),
+	fNameRequestFailed(false)
 {
 	CALLED();
 	fBdaddr = address;
@@ -343,7 +389,11 @@ RemoteDevice::RemoteDevice(const BString& address)
 	:
 	BluetoothDevice(),
 	fDiscovererLocalDevice(NULL),
-	fScanMode(0)
+	fScanMode(0),
+	fFriendlyNameIsComplete(false),
+	fLowEnergy(false),
+	fAddressType(LE_PUBLIC_ADDRESS),
+	fNameRequestFailed(false)
 {
 	CALLED();
 	fBdaddr = bdaddrUtils::FromString((const char*)address.String());

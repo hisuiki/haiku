@@ -65,6 +65,11 @@ struct hci_command_header {
 /* - Host Controller and Baseband Command definition - */
 #define OGF_CONTROL_BASEBAND			0x03
 
+	#define OCF_SET_EVENT_MASK			0x0001
+	struct hci_cp_set_event_mask {
+		uint8		mask[8];
+	} __attribute__ ((packed));
+
 	#define OCF_RESET					0x0003
   /*struct hci_reset {
 		void no_fields;
@@ -198,6 +203,18 @@ struct hci_command_header {
 	#define OCF_WRITE_VOICE_SETTING		0x0026
 	struct hci_cp_write_voice_setting {
 		uint16		voice_setting;
+	} __attribute__ ((packed));
+
+	/* Inquiry mode. Standard results carry no name, so the extended ones are
+	   what makes a device's name arrive with the inquiry itself rather than
+	   needing a Remote Name Request afterwards. */
+	#define OCF_READ_INQUIRY_MODE		0x0044
+	#define OCF_WRITE_INQUIRY_MODE		0x0045
+	#define HCI_INQUIRY_MODE_STANDARD	0x00
+	#define HCI_INQUIRY_MODE_RSSI		0x01
+	#define HCI_INQUIRY_MODE_RSSI_OR_EIR 0x02
+	struct hci_cp_write_inquiry_mode {
+		uint8		mode;
 	} __attribute__ ((packed));
 
 #define OCF_IO_CAPABILITY_REQUEST_REPLY 0x002B
@@ -407,6 +424,76 @@ struct hci_command_header {
 
 /* Testing commands */
 #define OGF_TESTING_CMD					0x06
+
+/* - LE Controller Command definition - */
+#define OGF_LE_CONTROL					0x08
+
+	#define OCF_LE_SET_EVENT_MASK		0x0001
+	struct hci_cp_le_set_event_mask {
+		uint8		mask[8];
+	} __attribute__ ((packed));
+
+	#define OCF_LE_READ_BUFFER_SIZE		0x0002
+	struct hci_rp_le_read_buffer_size {
+		uint8		status;
+		uint16		packet_length;
+		uint8		max_packets;
+	} __attribute__ ((packed));
+
+	#define OCF_LE_READ_LOCAL_FEATURES	0x0003
+
+	#define OCF_LE_SET_SCAN_PARAMETERS	0x000B
+	/* Scan type */
+	#define LE_SCAN_TYPE_PASSIVE		0x00
+	#define LE_SCAN_TYPE_ACTIVE			0x01
+	/* Own address type */
+	#define LE_OWN_ADDRESS_PUBLIC		0x00
+	#define LE_OWN_ADDRESS_RANDOM		0x01
+	/* Scanning filter policy */
+	#define LE_SCAN_FILTER_ACCEPT_ALL	0x00
+	#define LE_SCAN_FILTER_ALLOW_LIST	0x01
+	struct hci_cp_le_set_scan_parameters {
+		uint8		type;
+		uint16		interval;
+		uint16		window;
+		uint8		own_address_type;
+		uint8		filter_policy;
+	} __attribute__ ((packed));
+
+	#define OCF_LE_SET_SCAN_ENABLE		0x000C
+	struct hci_cp_le_set_scan_enable {
+		uint8		enable;
+		uint8		filter_duplicates;
+	} __attribute__ ((packed));
+
+	#define OCF_LE_CREATE_CONN			0x000D
+	struct hci_cp_le_create_conn {
+		uint16		scan_interval;
+		uint16		scan_window;
+		uint8		filter_policy;
+		uint8		peer_address_type;
+		bdaddr_t	peer_address;
+		uint8		own_address_type;
+		uint16		min_interval;
+		uint16		max_interval;
+		uint16		latency;
+		uint16		supervision_timeout;
+		uint16		min_ce_length;
+		uint16		max_ce_length;
+	} __attribute__ ((packed));
+
+	#define OCF_LE_CREATE_CONN_CANCEL	0x000E
+
+	#define OCF_LE_START_ENCRYPTION		0x0019
+	struct hci_cp_le_start_encryption {
+		uint16		handle;
+		uint8		random[8];
+		uint16		diversifier;
+		uint8		key[16];
+	} __attribute__ ((packed));
+
+	#define OCF_LE_LTK_REPLY			0x001A
+	#define OCF_LE_LTK_NEG_REPLY		0x001B
 
 /* Vendor specific commands */
 #define OGF_VENDOR_CMD					0x3F
