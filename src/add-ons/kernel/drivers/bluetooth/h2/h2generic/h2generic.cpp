@@ -23,6 +23,7 @@
 #include "bluetooth/HCI/btHCI_transport.h"
 #include "h2cfg.h"
 #include "h2debug.h"
+#include "h2intel.h"
 #include "h2transactions.h"
 #include "h2upper.h"
 #include "h2util.h"
@@ -56,6 +57,8 @@ usb_support_descriptor supported_devices[] = {
 	// Generic Bluetooth USB device
 	// Class, SubClass, and Protocol codes that describe a Bluetooth device
 	{ UDCLASS_WIRELESS, UDSUBCLASS_RF, UDPROTO_BLUETOOTH, 0, 0 },
+	// Intel Wireless 8260/8265 Bluetooth function (secure boot firmware)
+	{ 0, 0, 0, 0x8087, 0x0a2b },
 
 	// Broadcom BCM2035
 	{ 0, 0, 0, 0x0a5c, 0x200a },
@@ -304,6 +307,8 @@ device_added(usb_device dev, void** cookie)
 	// info to our driver. If this code increases too much reconsider
 	// this implementation
 	desc = usb->get_device_descriptor(dev);
+	if (desc->vendor_id == 0x8087 && desc->product_id == 0x0a2b)
+		new_bt_dev->driver_info |= BT_INTEL_SECURE_BOOT;
 	if (desc->vendor_id == 0x0a5c
 		&& (desc->product_id == 0x200a
 			|| desc->product_id == 0x2009
@@ -544,6 +549,15 @@ device_open(const char* name, uint32 flags, void **cookie)
 	if (TEST_AND_SET(&bdev->state, RUNNING)) {
 		ERROR("%s: dev already running! - reOpened device!\n", __func__);
 		return B_ERROR;
+	}
+
+	if ((bdev->driver_info & BT_INTEL_SECURE_BOOT) != 0) {
+		err = intel_bluetooth_setup(bdev);
+		if (err != B_OK) {
+			TEST_AND_CLEAR(&bdev->state, RUNNING);
+			*cookie = NULL;
+			return err;
+		}
 	}
 
 	acquire_sem(bdev->lock);
@@ -907,7 +921,7 @@ init_driver(void)
 	}
 
 	// Note: After here device_added and publish devices hooks are called
-	usb->register_driver(BLUETOOTH_DEVICE_DEVFS_NAME, supported_devices, 1, NULL);
+	usb->register_driver(BLUETOOTH_DEVICE_DEVFS_NAME, supported_devices, 2, NULL);
 	usb->install_notify(BLUETOOTH_DEVICE_DEVFS_NAME, &notify_hooks);
 
 	add_debugger_command("bth2generic", &dump_driver,

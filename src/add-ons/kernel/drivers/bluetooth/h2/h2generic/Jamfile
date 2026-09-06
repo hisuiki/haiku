@@ -5,6 +5,7 @@ UsePrivateKernelHeaders ;
 
 KernelAddon h2generic :
 	h2generic.cpp
+	h2intel.cpp
 	h2transactions.cpp
 	h2upper.cpp
 	h2util.cpp
