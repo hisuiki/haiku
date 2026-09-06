@@ -86,14 +86,6 @@ PCApplication::ReadyToRun()
 			Quit();
 			return;
 		}
-	} else {
-		BString text(B_TRANSLATE("%appname% is already installed in Deskbar."));
-		text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("ProcessController"));
-		BAlert* alert = new BAlert(B_TRANSLATE("Info"), text,
-			B_TRANSLATE("OK"), NULL,
-			NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
-		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
-		alert->Go();
 	}
 
 	new PCWindow();

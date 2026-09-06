@@ -33,6 +33,8 @@
 
 #include "AutoIcon.h"
 #include "Colors.h"
+#include "GpuQuery.h"
+#include "GpuBarMenu.h"
 #include "IconMenuItem.h"
 #include "MemoryBarMenu.h"
 #include "MemoryBarMenuItem.h"
@@ -64,6 +66,8 @@ const rgb_color kIdleGreen = {110, 190,110,	255};
 
 ProcessController* gPCView;
 uint32 gCPUcount;
+rgb_color gGpuColor;
+rgb_color gGpuColorSelected;
 rgb_color gUserColor;
 rgb_color gUserColorSelected;
 rgb_color gIdleColor;
@@ -148,6 +152,17 @@ ProcessController::ComposeSize(float maxWidth, float maxHeight)
 	// For the memory bar
 	width += 8;
 
+	bool hasGpu = false;
+	if (gGpuQuery) {
+		hasGpu = gGpuQuery->IsAvailable();
+	} else {
+		GpuQuery tempQuery;
+		tempQuery.Open();
+		hasGpu = tempQuery.IsAvailable();
+	}
+	if (hasGpu)
+		width += 8;
+
 	// Scale, and be at least as wide as tall
 	if (maxHeight > 16)
 		width *= (int)(maxHeight / 16);
@@ -172,9 +187,16 @@ ProcessController::ProcessController(BRect frame, bool temp)
 	fTerminalIcon(kTerminalSig),
 	kCPUCount(sysconf(_SC_NPROCESSORS_CONF)),
 	fTemp(temp),
+	fMemoryUsage(0),
+	fGpuUsage(0),
 	fLastBarHeight(new float[kCPUCount]),
+	fLastMemoryHeight(0),
+	fLastGpuBarHeight(0),
+	fGpuQuery(NULL),
 	fCPUTimes(new double[kCPUCount]),
-	fPrevActive(new bigtime_t[kCPUCount])
+	fPrevActive(new bigtime_t[kCPUCount]),
+	fPrevTime(0),
+	fMessageRunner(NULL)
 {
 	if (!temp) {
 		Init();
@@ -196,9 +218,16 @@ ProcessController::ProcessController(BMessage *data)
 	fTerminalIcon(kTerminalSig),
 	kCPUCount(sysconf(_SC_NPROCESSORS_CONF)),
 	fTemp(false),
+	fMemoryUsage(0),
+	fGpuUsage(0),
 	fLastBarHeight(new float[kCPUCount]),
+	fLastMemoryHeight(0),
+	fLastGpuBarHeight(0),
+	fGpuQuery(NULL),
 	fCPUTimes(new double[kCPUCount]),
-	fPrevActive(new bigtime_t[kCPUCount])
+	fPrevActive(new bigtime_t[kCPUCount]),
+	fPrevTime(0),
+	fMessageRunner(NULL)
 {
 	Init();
 }
@@ -215,9 +244,16 @@ ProcessController::ProcessController(BSize size)
 	fTerminalIcon(kTerminalSig),
 	kCPUCount(sysconf(_SC_NPROCESSORS_CONF)),
 	fTemp(false),
+	fMemoryUsage(0),
+	fGpuUsage(0),
 	fLastBarHeight(new float[kCPUCount]),
+	fLastMemoryHeight(0),
+	fLastGpuBarHeight(0),
+	fGpuQuery(NULL),
 	fCPUTimes(new double[kCPUCount]),
-	fPrevActive(new bigtime_t[kCPUCount])
+	fPrevActive(new bigtime_t[kCPUCount]),
+	fPrevTime(0),
+	fMessageRunner(NULL)
 {
 	Init();
 }
@@ -230,12 +266,15 @@ ProcessController::~ProcessController()
 			status_t return_value;
 			wait_for_thread (gPopupThreadID, &return_value);
 		}
+		_SaveSettings();
 	}
 
-	_SaveSettings();
-
 	delete fMessageRunner;
-	gPCView = NULL;
+	if (gPCView == this)
+		gPCView = NULL;
+	if (gGpuQuery == fGpuQuery)
+		gGpuQuery = NULL;
+	delete fGpuQuery;
 
 	delete[] fPrevActive;
 	delete[] fCPUTimes;
@@ -253,6 +292,13 @@ ProcessController::Init()
 	gPCView = this;
 	fMessageRunner = NULL;
 	fLastMemoryHeight = 0;
+	fLastGpuBarHeight = 0;
+	fGpuUsage = 0;
+	if (fGpuQuery == NULL) {
+		fGpuQuery = new GpuQuery();
+		fGpuQuery->Open();
+	}
+	gGpuQuery = fGpuQuery;
 	fPrevTime = 0;
 
 	_LoadSettings();
@@ -592,6 +638,8 @@ ProcessController::AttachedToWindow()
 	gIdleColorSelected = tint_color(gIdleColor, B_HIGHLIGHT_BACKGROUND_TINT);
 	gKernelColor = kKernelBlue;
 	gKernelColorSelected = tint_color(gKernelColor, B_HIGHLIGHT_BACKGROUND_TINT);
+	gGpuColor = kGpuTeal;
+	gGpuColorSelected = tint_color(gGpuColor, B_HIGHLIGHT_BACKGROUND_TINT);
 	gUserColor = tint_color(gKernelColor, B_LIGHTEN_2_TINT);
 	gUserColorSelected = tint_color(gUserColor, B_HIGHLIGHT_BACKGROUND_TINT);
 	gFrameColor = tint_color(ui_color(B_PANEL_BACKGROUND_COLOR),
@@ -648,20 +696,24 @@ ProcessController::DoDraw(bool force)
 	float barWidth;
 	float barGap;
 	float memWidth;
+	float gpuWidth = 0;
 	if (gCPUcount <= 4 && bounds.Width() == 15) {
 		// Use fixed sizes for small CPU counts
 		barWidth = layout[gCPUcount].cpu_width;
 		barGap = layout[gCPUcount].cpu_inter;
 		memWidth = layout[gCPUcount].mem_width;
+		gpuWidth = 0; // Don't draw GPU on very small
 	} else {
 		memWidth = floorf((bounds.Height() + 1) / 8);
+		gpuWidth = (gGpuQuery && gGpuQuery->IsAvailable()) ? memWidth : 0;
 		barGap = ((bounds.Width() + 1) / gCPUcount) > 3 ? 1 : 0;
-		barWidth = floorf((bounds.Width() - 1 - memWidth - barGap * gCPUcount)
+		barWidth = floorf((bounds.Width() - 1 - memWidth - gpuWidth - barGap * gCPUcount)
 			/ gCPUcount);
 	}
 	// interspace
 	float right = left + gCPUcount * (barWidth + barGap) - barGap;
-	float leftMem = bounds.Width() - memWidth;
+	float leftMem = bounds.Width() - memWidth - gpuWidth;
+	float leftGpu = bounds.Width() - gpuWidth;
 		// right of CPU frame...
 	if (force && Parent()) {
 		SetHighColor(Parent()->ViewColor());
@@ -714,7 +766,7 @@ ProcessController::DoDraw(bool force)
 		fLastBarHeight[x] = barHeight;
 	}
 
-	float rightMem = bounds.Width() - 1;
+	float rightMem = leftMem + memWidth - 1;
 	float rem = fMemoryUsage * (h + 1);
 	float barHeight = floorf(rem);
 	rem -= barHeight;
@@ -742,13 +794,44 @@ ProcessController::DoDraw(bool force)
 			bottom - barHeight));
 	}
 	float usedBottom = bottom;
-//	if (!force && previousLimit < bottom)
-//		usedBottom = previousLimit + 1;
 	if (limit < usedBottom) {
 		SetHighColor(used_memory_color);
 		FillRect(BRect(leftMem, limit + 1, rightMem, usedBottom));
 	}
 	fLastMemoryHeight = barHeight;
+
+	if (gpuWidth > 0) {
+		if (force) {
+			SetHighColor(frame_color);
+			StrokeRect(BRect(leftGpu - 1, top - 1, leftGpu + gpuWidth, bottom + 1));
+		}
+		float rightGpu = leftGpu + gpuWidth - 1;
+		float remGpu = fGpuUsage * (h + 1);
+		float gpuHeight = floorf(remGpu);
+		remGpu -= gpuHeight;
+		
+		float limitGpu = bottom - gpuHeight;
+		float previousLimitGpu = bottom - fLastGpuBarHeight;
+		float freeTopGpu = top;
+		if (!force && previousLimitGpu > top)
+			freeTopGpu = previousLimitGpu - 1;
+		
+		if (limitGpu > freeTopGpu) {
+			SetHighColor(idle_color);
+			FillRect(BRect(leftGpu, freeTopGpu, rightGpu, limitGpu - 1));
+		}
+		if (gpuHeight <= h) {
+			rgb_color fraction_color;
+			mix_colors(fraction_color, idle_color, gGpuColor, remGpu);
+			SetHighColor(fraction_color);
+			StrokeLine(BPoint(leftGpu, bottom - gpuHeight), BPoint(rightGpu, bottom - gpuHeight));
+		}
+		if (limitGpu < bottom) {
+			SetHighColor(gGpuColor);
+			FillRect(BRect(leftGpu, limitGpu + 1, rightGpu, bottom));
+		}
+		fLastGpuBarHeight = gpuHeight;
+	}
 }
 
 
@@ -761,6 +844,11 @@ ProcessController::Update()
 
 	cpu_info* cpuInfos = new cpu_info[gCPUcount];
 	get_cpu_info(0, gCPUcount, cpuInfos);
+
+	if (fGpuQuery) {
+		fGpuQuery->Query();
+		fGpuUsage = fGpuQuery->GetTotalGpuUsage();
+	}
 
 	fMemoryUsage = float(info.used_pages) / float(info.max_pages);
 	// Calculate work done since last call to Update() for each CPU
@@ -860,7 +948,22 @@ thread_popup(void *arg)
 		}
 	}
 
+	if (gGpuQuery && gGpuQuery->IsAvailable()) {
+		CPUPopup->AddItem(new BSeparatorItem());
+		GpuBarMenu* gpuSubmenu = new GpuBarMenu(B_TRANSLATE("GPU usage"),
+			infos, systemInfo.used_teams);
+		CPUPopup->AddItem(gpuSubmenu);
+	}
+
 	addtopbottom(CPUPopup);
+
+	// GPU Usage section (at bottom of Threads and CPU usage)
+	if (gGpuQuery && gGpuQuery->IsAvailable()) {
+		GpuBarMenu* GpuPopup = new GpuBarMenu(B_TRANSLATE("GPU usage"),
+			infos, systemInfo.used_teams);
+		addtopbottom(GpuPopup);
+	}
+
 	addtopbottom(new BSeparatorItem());
 
 	// CPU on/off section

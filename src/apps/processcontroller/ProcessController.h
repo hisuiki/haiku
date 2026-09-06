@@ -14,6 +14,7 @@
 
 class BMessageRunner;
 class ThreadBarMenu;
+class GpuQuery;
 
 
 class ProcessController : public BView {
@@ -53,8 +54,11 @@ class ProcessController : public BView {
 		const int32		kCPUCount;
 		bool			fTemp;
 		float			fMemoryUsage;
+		float			fGpuUsage;
 		float*			fLastBarHeight;
 		float			fLastMemoryHeight;
+		float			fLastGpuBarHeight;
+		GpuQuery*		fGpuQuery;
 		double*			fCPUTimes;
 		bigtime_t*		fPrevActive;
 		bigtime_t		fPrevTime;
@@ -64,6 +68,8 @@ class ProcessController : public BView {
 
 extern	ProcessController*	gPCView;
 extern	uint32				gCPUcount;
+extern	rgb_color			gGpuColor;
+extern	rgb_color			gGpuColorSelected;
 extern	rgb_color			gIdleColor;
 extern	rgb_color			gIdleColorSelected;
 extern	rgb_color			gKernelColor;

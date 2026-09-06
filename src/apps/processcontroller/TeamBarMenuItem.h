@@ -25,6 +25,7 @@ public:
 
 	double			fUser;
 	double			fKernel;
+	double			fGpuUsage;
 
 private:
 	team_id			fTeamID;
@@ -32,6 +33,7 @@ private:
 	bigtime_t		fLastTime;
 	float			fGrenze1;
 	float			fGrenze2;
+	float			fGrenze3;
 };
 
 

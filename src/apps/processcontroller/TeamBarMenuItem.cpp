@@ -6,6 +6,7 @@
 #include "TeamBarMenuItem.h"
 
 #include "Colors.h"
+#include "GpuQuery.h"
 #include "ProcessController.h"
 #include "ThreadBarMenu.h"
 #include "ThreadBarMenuItem.h"
@@ -45,8 +46,10 @@ TeamBarMenuItem::Init()
 
 	fLastTime = system_time();
 	fKernel = -1;
+	fGpuUsage = 0;
 	fGrenze1 = -1;
 	fGrenze2 = -1;
+	fGrenze3 = -1;
 }
 
 
@@ -101,74 +104,66 @@ TeamBarMenuItem::DrawBar(bool force)
 	}
 
 	frame.InsetBy(1, 1);
-	BRect r = frame;
 	float grenze1 = frame.left + (frame.right - frame.left)
 		* fKernel / gCPUcount;
 	float grenze2 = frame.left + (frame.right - frame.left)
 		* (fKernel + fUser) / gCPUcount;
+	float grenze3 = frame.left + (frame.right - frame.left)
+		* (fKernel + fUser + fGpuUsage) / gCPUcount;
 
 	if (grenze1 > frame.right)
 		grenze1 = frame.right;
-
 	if (grenze2 > frame.right)
 		grenze2 = frame.right;
+	if (grenze3 > frame.right)
+		grenze3 = frame.right;
 
+	if (!force && fGrenze1 == grenze1 && fGrenze2 == grenze2 && fGrenze3 == grenze3)
+		return;
+
+	BRect r = frame;
+
+	// Kernel segment
 	r.right = grenze1;
-	if (!force)
-		r.left = fGrenze1;
-
 	if (r.left < r.right) {
-		if (selected)
-			menu->SetHighColor(gKernelColorSelected);
-		else
-			menu->SetHighColor(gKernelColor);
-
+		menu->SetHighColor(selected ? gKernelColorSelected : gKernelColor);
 		menu->FillRect(r);
 	}
 
+	// User segment
 	r.left = grenze1;
 	r.right = grenze2;
-
-	if (!force) {
-		if (fGrenze2 > r.left && r.left >= fGrenze1)
-			r.left = fGrenze2;
-
-		if (fGrenze1 < r.right && r.right <= fGrenze2)
-			r.right = fGrenze1;
-	}
-
 	if (r.left < r.right) {
 		if (selected) {
 			menu->SetHighColor(fTeamID == B_SYSTEM_TEAM
-				? gIdleColorSelected
-				: gUserColorSelected);
+				? gIdleColorSelected : gUserColorSelected);
 		} else {
 			menu->SetHighColor(fTeamID == B_SYSTEM_TEAM
-				? gIdleColor
-				: gUserColor);
+				? gIdleColor : gUserColor);
 		}
-
 		menu->FillRect(r);
 	}
 
+	// GPU segment
 	r.left = grenze2;
-	r.right = frame.right;
-
-	if (!force)
-		r.right = fGrenze2;
-
+	r.right = grenze3;
 	if (r.left < r.right) {
-		if (selected)
-			menu->SetHighColor(gWhiteSelected);
-		else
-			menu->SetHighColor(kWhite);
+		menu->SetHighColor(selected ? gGpuColorSelected : gGpuColor);
+		menu->FillRect(r);
+	}
 
+	// Unused / Idle segment
+	r.left = grenze3;
+	r.right = frame.right;
+	if (r.left < r.right) {
+		menu->SetHighColor(selected ? gWhiteSelected : kWhite);
 		menu->FillRect(r);
 	}
 
 	menu->SetHighColor(highColor);
 	fGrenze1 = grenze1;
 	fGrenze2 = grenze2;
+	fGrenze3 = grenze3;
 }
 
 
@@ -207,6 +202,9 @@ TeamBarMenuItem::BarUpdate()
 
 		if (fKernel < 0)
 			fKernel = 0;
+			
+		if (gGpuQuery)
+			fGpuUsage = gGpuQuery->GetTeamGpuUsage(fTeamID);
 
 		fLastTime = now;
 		fTeamUsageInfo = usage;

@@ -37,6 +37,7 @@ const rgb_color kBrown =					{154,110,45,	255};
 const rgb_color kLightMetallicBlue =		{143,166,240,	255};
 const rgb_color kMedMetallicBlue =			{75, 96, 154,	255};
 const rgb_color kDarkMetallicBlue =			{78, 89, 126,	255};
+const rgb_color kGpuTeal =					{0, 140, 210,	255};
 
 const rgb_color kGebHighlight =				{152, 152, 203,	255};
 const rgb_color kBordeaux =					{80, 0, 0,		255};

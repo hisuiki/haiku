@@ -9,9 +9,12 @@
 #include "TeamBarMenuItem.h"
 #include "NoiseBarMenuItem.h"
 #include "ProcessController.h"
+#include "GpuQuery.h"
+#include "GpuBarMenu.h"
 
 #include <Bitmap.h>
 #include <Roster.h>
+#include <SeparatorItem.h>
 #include <Window.h>
 
 #include <stdlib.h>
@@ -65,6 +68,9 @@ TeamBarMenu::Draw(BRect updateRect)
 void
 TeamBarMenu::Pulse()
 {
+	if (gGpuQuery)
+		gGpuQuery->Query();
+		
 	Window()->BeginViewTransaction();
 
 	// create the list of items to remove, for their team is gone. Update the old teams.
@@ -73,7 +79,12 @@ TeamBarMenu::Pulse()
 	int	k;
 	TeamBarMenuItem *item;
 	double total = 0;
-	for (k = 1; (item = (TeamBarMenuItem*)ItemAt(k)) != NULL; k++) {
+	for (k = 1; k < CountItems(); k++) {
+		BMenuItem* menuItem = ItemAt(k);
+		item = dynamic_cast<TeamBarMenuItem*>(menuItem);
+		if (item == NULL)
+			continue;
+
 		item->BarUpdate();
 		if (item->fKernel < 0) {
 			if (lastRecycle == fRecycleCount) {
@@ -131,7 +142,12 @@ TeamBarMenu::Pulse()
 						infos.team_info.team, infos.team_info.thread_count),
 						kill_team, infos.team_info.team, infos.team_icon, true);
 					item->SetTarget(gPCView);
-					AddItem(item);
+					int32 insertIdx = CountItems();
+					while (insertIdx > 0
+						&& dynamic_cast<TeamBarMenuItem*>(ItemAt(insertIdx - 1)) == NULL) {
+						insertIdx--;
+					}
+					AddItem(item, insertIdx);
 					item->BarUpdate();
 				}
 				if (item->fKernel >= 0) {

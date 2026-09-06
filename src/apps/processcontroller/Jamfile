@@ -5,6 +5,9 @@ UsePrivateHeaders app interface shared ;
 
 Application ProcessController :
 	AutoIcon.cpp
+	GpuBarMenu.cpp
+	GpuBarMenuItem.cpp
+	GpuQuery.cpp
 	IconMenuItem.cpp
 	KernelMemoryBarMenuItem.cpp
 	MemoryBarMenu.cpp
