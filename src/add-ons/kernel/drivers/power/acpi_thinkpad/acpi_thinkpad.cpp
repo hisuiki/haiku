@@ -23,7 +23,7 @@
 #include <usb/USB_hid_page_generic_desktop.h>
 
 
-//#define TRACE_THINKPAD
+#define TRACE_THINKPAD
 #ifdef TRACE_THINKPAD
 #	define TRACE(x...) dprintf("acpi_thinkpad: " x)
 #else
@@ -72,6 +72,7 @@ struct acpi_thinkpad_device_info {
 	int32						open_count;
 
 	uint32						hkey_version;
+	uint32						hotkey_mask;
 	bool						has_kbdlight;
 	uint8						kbdlight_level;
 	bool						mute_led;
@@ -119,6 +120,7 @@ evaluate_method_int_arg(acpi_device_module_info* acpi, acpi_device cookie,
 	const char* method, uint64 inArg, uint64* outValue)
 {
 	acpi_object_type arg;
+	memset(&arg, 0, sizeof(arg));
 	arg.object_type = ACPI_TYPE_INTEGER;
 	arg.integer.integer = inArg;
 	acpi_objects args = { 1, &arg };
@@ -127,7 +129,8 @@ evaluate_method_int_arg(acpi_device_module_info* acpi, acpi_device cookie,
 	buf.pointer = NULL;
 	buf.length = ACPI_ALLOCATE_BUFFER;
 
-	status_t status = acpi->evaluate_method(cookie, method, &args, &buf);
+	status_t status = acpi->evaluate_method(cookie, method, &args,
+		outValue != NULL ? &buf : NULL);
 	if (status != B_OK)
 		return status;
 
@@ -135,9 +138,9 @@ evaluate_method_int_arg(acpi_device_module_info* acpi, acpi_device cookie,
 		acpi_object_type* obj = (acpi_object_type*)buf.pointer;
 		if (obj->object_type == ACPI_TYPE_INTEGER)
 			*outValue = obj->integer.integer;
+		free(buf.pointer);
 	}
 
-	free(buf.pointer);
 	return B_OK;
 }
 
@@ -147,6 +150,7 @@ evaluate_method_2int_args(acpi_device_module_info* acpi, acpi_device cookie,
 	const char* method, uint64 arg1, uint64 arg2, uint64* outValue)
 {
 	acpi_object_type args[2];
+	memset(args, 0, sizeof(args));
 	args[0].object_type = ACPI_TYPE_INTEGER;
 	args[0].integer.integer = arg1;
 	args[1].object_type = ACPI_TYPE_INTEGER;
@@ -157,7 +161,8 @@ evaluate_method_2int_args(acpi_device_module_info* acpi, acpi_device cookie,
 	buf.pointer = NULL;
 	buf.length = ACPI_ALLOCATE_BUFFER;
 
-	status_t status = acpi->evaluate_method(cookie, method, &params, &buf);
+	status_t status = acpi->evaluate_method(cookie, method, &params,
+		outValue != NULL ? &buf : NULL);
 	if (status != B_OK)
 		return status;
 
@@ -165,9 +170,9 @@ evaluate_method_2int_args(acpi_device_module_info* acpi, acpi_device cookie,
 		acpi_object_type* obj = (acpi_object_type*)buf.pointer;
 		if (obj->object_type == ACPI_TYPE_INTEGER)
 			*outValue = obj->integer.integer;
+		free(buf.pointer);
 	}
 
-	free(buf.pointer);
 	return B_OK;
 }
 
@@ -204,12 +209,18 @@ poll_hkey_event(acpi_device_module_info* acpi, acpi_device cookie, uint32* event
 void
 acpi_thinkpad_device_info::QueueKey(uint32 keycode)
 {
+	dprintf("acpi_thinkpad: QueueKey(0x%" B_PRIx32 "), open_count=%" B_PRId32 "\n",
+		keycode, open_count);
 	MutexLocker locker(lock);
-	if (open_count <= 0 || key_buffer == NULL || key_sem < 0)
+	if (open_count <= 0 || key_buffer == NULL || key_sem < 0) {
+		dprintf("acpi_thinkpad: QueueKey dropped (open_count=%" B_PRId32 ")\n", open_count);
 		return;
+	}
 
-	if (ring_buffer_writable(key_buffer) < (ssize_t)(sizeof(raw_key_info) * 2))
+	if (ring_buffer_writable(key_buffer) < (ssize_t)(sizeof(raw_key_info) * 2)) {
+		dprintf("acpi_thinkpad: QueueKey dropped (buffer full)\n");
 		return;
+	}
 
 	raw_key_info keyInfo;
 	keyInfo.timestamp = system_time();
@@ -230,15 +241,21 @@ acpi_thinkpad_device_info::QueueKey(uint32 keycode)
 void
 acpi_thinkpad_device_info::HandleHkeyEvent(uint32 hkey)
 {
-	TRACE("HKEY event: 0x%" B_PRIx32 "\n", hkey);
+	dprintf("acpi_thinkpad: HandleHkeyEvent: 0x%" B_PRIx32 "\n", hkey);
 
 	switch (hkey) {
 		case TP_HKEY_EV_BRIGHTNESS_UP:
+		case 0x1405:
 			QueueKey(KEY_BRIGHTNESS_UP);
 			break;
 
 		case TP_HKEY_EV_BRIGHTNESS_DOWN:
+		case 0x1404:
 			QueueKey(KEY_BRIGHTNESS_DOWN);
+			break;
+
+		case TP_HKEY_EV_BRGHT_CHANGED:
+			dprintf("acpi_thinkpad: brightness changed event (0x5010)\n");
 			break;
 
 		case TP_HKEY_EV_VOL_UP:
@@ -271,7 +288,7 @@ acpi_thinkpad_device_info::HandleHkeyEvent(uint32 hkey)
 			if (has_kbdlight) {
 				kbdlight_level = (kbdlight_level + 1) % 3;
 				evaluate_method_int_arg(acpi, acpi_cookie, "MLCS", kbdlight_level, NULL);
-				TRACE("keyboard backlight level %u\n", kbdlight_level);
+				dprintf("acpi_thinkpad: keyboard backlight level %u\n", kbdlight_level);
 			}
 			QueueKey(KEY_KBD_LIGHT);
 			break;
@@ -280,7 +297,7 @@ acpi_thinkpad_device_info::HandleHkeyEvent(uint32 hkey)
 			if (has_kbdlight) {
 				kbdlight_level = (kbdlight_level + 1) % 3;
 				evaluate_method_int_arg(acpi, acpi_cookie, "MLCS", kbdlight_level, NULL);
-				TRACE("keyboard backlight level %u\n", kbdlight_level);
+				dprintf("acpi_thinkpad: keyboard backlight level %u\n", kbdlight_level);
 			}
 			break;
 
@@ -306,6 +323,7 @@ acpi_thinkpad_device_info::HandleHkeyEvent(uint32 hkey)
 			break;
 
 		default:
+			dprintf("acpi_thinkpad: unhandled HKEY event: 0x%" B_PRIx32 "\n", hkey);
 			break;
 	}
 }
@@ -315,16 +333,19 @@ static void
 acpi_thinkpad_notify_handler(acpi_handle handle, uint32 value, void* context)
 {
 	acpi_thinkpad_device_info* device = (acpi_thinkpad_device_info*)context;
+	dprintf("acpi_thinkpad: notify handler called with value 0x%" B_PRIx32 "\n", value);
+
 	if (value != 0x80)
 		return;
 
 	while (true) {
 		uint32 hkey = 0;
-		if (poll_hkey_event(device->acpi, device->acpi_cookie, &hkey) != B_OK
-			|| hkey == 0) {
+		status_t status = poll_hkey_event(device->acpi, device->acpi_cookie, &hkey);
+		if (status != B_OK || hkey == 0) {
 			break;
 		}
 
+		dprintf("acpi_thinkpad: polled hkey event 0x%" B_PRIx32 "\n", hkey);
 		device->HandleHkeyEvent(hkey);
 	}
 }
@@ -487,16 +508,20 @@ acpi_thinkpad_device_read(void* _cookie, off_t position, void* buffer, size_t* n
 	char status[256];
 	snprintf(status, sizeof(status),
 		"ThinkPad ACPI HKEY v0x%" B_PRIx32 "\n"
+		"Hotkey Mask: 0x%08" B_PRIx32 "\n"
 		"Keyboard Backlight: %s (level %u)\n"
 		"Audio Mute LED: %s\n"
 		"Mic Mute LED: %s\n"
-		"Tablet Mode: %s\n",
+		"Tablet Mode: %s\n"
+		"Keyboard open count: %" B_PRId32 "\n",
 		device->hkey_version,
+		device->hotkey_mask,
 		device->has_kbdlight ? "supported" : "unsupported",
 		device->kbdlight_level,
 		device->mute_led ? "on" : "off",
 		device->mic_mute_led ? "on" : "off",
-		device->tablet_mode ? "active" : "inactive");
+		device->tablet_mode ? "active" : "inactive",
+		device->open_count);
 
 	size_t len = strlen(status);
 	if ((size_t)position >= len) {
@@ -721,7 +746,11 @@ acpi_thinkpad_init_driver(device_node* node, void** driverCookie)
 	device->tablet_mode = false;
 
 	// Enable HKEY event interface
-	evaluate_method_int_arg(device->acpi, device->acpi_cookie, "MHKC", 1, NULL);
+	status_t status = evaluate_method_int_arg(device->acpi, device->acpi_cookie, "MHKC", 1, NULL);
+	dprintf("acpi_thinkpad: MHKC(1) status = 0x%08" B_PRIx32 "\n", status);
+
+	// Disable backlight delay if PWMS exists
+	evaluate_method_int_arg(device->acpi, device->acpi_cookie, "PWMS", 0, NULL);
 
 	// Query HKEY interface version
 	uint64 version = 0;
@@ -730,21 +759,34 @@ acpi_thinkpad_init_driver(device_node* node, void** driverCookie)
 	else
 		device->hkey_version = 0x0100;
 
-	TRACE("HKEY interface version: 0x%" B_PRIx32 "\n", device->hkey_version);
+	dprintf("acpi_thinkpad: HKEY interface version: 0x%" B_PRIx32 "\n", device->hkey_version);
 
-	// Unmask all 32 hotkey events
+	// Query supported hotkey mask (MHKA)
+	uint64 allMask = 0;
+	if (evaluate_integer_method(device->acpi, device->acpi_cookie, "MHKA", &allMask) != B_OK || allMask == 0)
+		allMask = 0xfffffffb;
+	dprintf("acpi_thinkpad: MHKA mask: 0x%08" B_PRIx64 "\n", allMask);
+	device->hotkey_mask = (uint32)allMask;
+
+	// Unmask all hotkey events using MHKM (both per-bit and bulk mask for compatibility)
 	for (uint32 i = 1; i <= 32; i++) {
-		evaluate_method_2int_args(device->acpi, device->acpi_cookie, "MHKM", i, 1, NULL);
+		status = evaluate_method_2int_args(device->acpi, device->acpi_cookie, "MHKM", i, 1, NULL);
+		if (status != B_OK)
+			dprintf("acpi_thinkpad: MHKM(%u, 1) status = 0x%08" B_PRIx32 "\n", i, status);
 	}
+	evaluate_method_int_arg(device->acpi, device->acpi_cookie, "MHKM", allMask, NULL);
 
 	// Check keyboard backlight support
 	uint64 kbdStatus = 0;
 	if (evaluate_method_int_arg(device->acpi, device->acpi_cookie, "MLCG", 0, &kbdStatus) == B_OK) {
+		dprintf("acpi_thinkpad: MLCG(0) = 0x%08" B_PRIx64 "\n", kbdStatus);
 		if ((kbdStatus & (1 << 9)) != 0) {
 			device->has_kbdlight = true;
 			device->kbdlight_level = (uint8)(kbdStatus & 0x3);
-			TRACE("Keyboard backlight supported, level: %u\n", device->kbdlight_level);
+			dprintf("acpi_thinkpad: keyboard backlight supported, level: %u\n", device->kbdlight_level);
 		}
+	} else {
+		dprintf("acpi_thinkpad: MLCG(0) failed\n");
 	}
 
 	// Check tablet mode
@@ -754,10 +796,12 @@ acpi_thinkpad_init_driver(device_node* node, void** driverCookie)
 	}
 
 	// Install ACPI notify handler
-	status_t status = device->acpi->install_notify_handler(device->acpi_cookie,
-		ACPI_DEVICE_NOTIFY, acpi_thinkpad_notify_handler, device);
+	status = device->acpi->install_notify_handler(device->acpi_cookie,
+		ACPI_ALL_NOTIFY, acpi_thinkpad_notify_handler, device);
 	if (status != B_OK) {
 		ERROR("Failed to install ACPI notify handler: %s\n", strerror(status));
+	} else {
+		dprintf("acpi_thinkpad: ACPI notify handler installed successfully\n");
 	}
 
 	*driverCookie = device;

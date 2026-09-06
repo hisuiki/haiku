@@ -33,6 +33,7 @@ enum {
 	TP_HKEY_EV_VOL_DOWN			= 0x1016, // Volume down
 	TP_HKEY_EV_VOL_MUTE			= 0x1017, // Volume mute
 	TP_HKEY_EV_MIC_MUTE			= 0x101b, // Microphone mute
+	TP_HKEY_EV_BRGHT_CHANGED	= 0x5010, // Backlight control / brightness changed
 };
 
 /* ioctl opcodes for /dev/power/thinkpad */
