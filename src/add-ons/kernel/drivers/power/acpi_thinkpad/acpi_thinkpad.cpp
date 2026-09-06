@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include <ACPI.h>
+#include <ISA.h>
 #include <device_manager.h>
 #include <Drivers.h>
 #include <KernelExport.h>
@@ -58,7 +59,48 @@
 	((B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_AL_LOCAL_MACHINE_BROWSER)
 
 
+/*	Notification values sent by the firmware to an ACPI video device, as
+	defined by appendix B of the ACPI specification. On machines where the
+	firmware handles the brightness keys itself, the HKEY interface never
+	reports them and these are the only notification we get.
+*/
+enum {
+	ACPI_VIDEO_NOTIFY_SWITCH			= 0x80,
+	ACPI_VIDEO_NOTIFY_PROBE				= 0x81,
+	ACPI_VIDEO_NOTIFY_CYCLE				= 0x82,
+	ACPI_VIDEO_NOTIFY_NEXT_OUTPUT		= 0x83,
+	ACPI_VIDEO_NOTIFY_PREV_OUTPUT		= 0x84,
+	ACPI_VIDEO_NOTIFY_CYCLE_BRIGHTNESS	= 0x85,
+	ACPI_VIDEO_NOTIFY_INC_BRIGHTNESS	= 0x86,
+	ACPI_VIDEO_NOTIFY_DEC_BRIGHTNESS	= 0x87,
+	ACPI_VIDEO_NOTIFY_ZERO_BRIGHTNESS	= 0x88,
+	ACPI_VIDEO_NOTIFY_DISPLAY_OFF		= 0x89,
+};
+
+/*	The firmware of ThinkPads which handle the brightness keys themselves
+	publishes the resulting backlight level in the CMOS NVRAM, which is the
+	only trace such a key press leaves for the OS to find.
+*/
+#define CMOS_ADDRESS_PORT					0x70
+#define CMOS_DATA_PORT						0x71
+#define TP_NVRAM_ADDR_BRIGHTNESS			0x5e
+#define TP_NVRAM_MASK_BRIGHTNESS_LEVEL		0x0f
+#define TP_NVRAM_MASK_BRIGHTNESS_TOGGLE		0x10
+#define TP_NVRAM_BRIGHTNESS_LEVELS			16
+
+#define TP_NVRAM_POLL_INTERVAL				100000	// 100 ms
+
+
+/*	_DOS: bits 1:0 select who switches the active display output, bit 2 tells
+	the firmware whether it may change the brightness by itself. Windows 8 and
+	later set bit 2, so that is what the firmware of recent machines expects.
+*/
+#define ACPI_VIDEO_DOS_OS_BRIGHTNESS		0x04
+
+
 static device_manager_info* sDeviceManager;
+static acpi_module_info* sAcpi;
+static isa_module_info* sIsa;
 
 
 struct acpi_thinkpad_device_info {
@@ -71,6 +113,15 @@ struct acpi_thinkpad_device_info {
 	sem_id						key_sem;
 	int32						open_count;
 
+	acpi_handle					video_bus;
+	acpi_handle					video_output;
+	uint32						video_dos;
+
+	thread_id					nvram_poller;
+	bool						stop_nvram_poller;
+	bool						brightness_from_firmware;
+	uint8						nvram_brightness;
+
 	uint32						hkey_version;
 	uint32						hotkey_mask;
 	bool						has_kbdlight;
@@ -81,6 +132,8 @@ struct acpi_thinkpad_device_info {
 
 	void						QueueKey(uint32 keycode);
 	void						HandleHkeyEvent(uint32 hkey);
+	void						HandleVideoEvent(uint32 event);
+	status_t					SetVideoDos(uint32 value);
 };
 
 
@@ -177,6 +230,22 @@ evaluate_method_2int_args(acpi_device_module_info* acpi, acpi_device cookie,
 }
 
 
+/*!	Evaluates a method taking a single integer argument on a namespace handle
+	rather than on our own ACPI device.
+*/
+static status_t
+evaluate_handle_int_arg(acpi_handle handle, const char* method, uint64 inArg)
+{
+	acpi_object_type arg;
+	memset(&arg, 0, sizeof(arg));
+	arg.object_type = ACPI_TYPE_INTEGER;
+	arg.integer.integer = inArg;
+	acpi_objects args = { 1, &arg };
+
+	return sAcpi->evaluate_method(handle, method, &args, NULL);
+}
+
+
 static status_t
 poll_hkey_event(acpi_device_module_info* acpi, acpi_device cookie, uint32* event)
 {
@@ -246,11 +315,13 @@ acpi_thinkpad_device_info::HandleHkeyEvent(uint32 hkey)
 	switch (hkey) {
 		case TP_HKEY_EV_BRIGHTNESS_UP:
 		case 0x1405:
+			brightness_from_firmware = true;
 			QueueKey(KEY_BRIGHTNESS_UP);
 			break;
 
 		case TP_HKEY_EV_BRIGHTNESS_DOWN:
 		case 0x1404:
+			brightness_from_firmware = true;
 			QueueKey(KEY_BRIGHTNESS_DOWN);
 			break;
 
@@ -326,6 +397,261 @@ acpi_thinkpad_device_info::HandleHkeyEvent(uint32 hkey)
 			dprintf("acpi_thinkpad: unhandled HKEY event: 0x%" B_PRIx32 "\n", hkey);
 			break;
 	}
+}
+
+
+status_t
+acpi_thinkpad_device_info::SetVideoDos(uint32 value)
+{
+	if (video_bus == NULL)
+		return B_NOT_SUPPORTED;
+
+	status_t status = evaluate_handle_int_arg(video_bus, "_DOS", value);
+	if (status == B_OK)
+		video_dos = value;
+	else
+		ERROR("_DOS(%" B_PRIu32 ") failed: %s\n", value, strerror(status));
+
+	return status;
+}
+
+
+void
+acpi_thinkpad_device_info::HandleVideoEvent(uint32 event)
+{
+	TRACE("video notify 0x%" B_PRIx32 "\n", event);
+
+	switch (event) {
+		case ACPI_VIDEO_NOTIFY_INC_BRIGHTNESS:
+			brightness_from_firmware = true;
+			QueueKey(KEY_BRIGHTNESS_UP);
+			break;
+
+		case ACPI_VIDEO_NOTIFY_DEC_BRIGHTNESS:
+			brightness_from_firmware = true;
+			QueueKey(KEY_BRIGHTNESS_DOWN);
+			break;
+
+		default:
+			TRACE("unhandled video event: 0x%" B_PRIx32 "\n", event);
+			break;
+	}
+}
+
+
+/*!	Reads a byte from the CMOS NVRAM.
+
+	The RTC uses the same pair of ports, but both accesses are a pair of
+	single byte port writes, and the RTC is only read a handful of times per
+	boot, so we do not bother synchronizing with it.
+*/
+static uint8
+read_nvram_byte(uint8 index)
+{
+	sIsa->write_io_8(CMOS_ADDRESS_PORT, index);
+	return sIsa->read_io_8(CMOS_DATA_PORT);
+}
+
+
+/*!	Polls the backlight level the firmware keeps in the CMOS NVRAM and turns
+	the changes into brightness key presses.
+
+	On this generation of ThinkPads the firmware handles the brightness keys
+	on its own: they produce neither a scan code, nor a HKEY event, nor an
+	ACPI video notification, so watching the level the firmware records is the
+	only way to see them. Linux' thinkpad_acpi driver does the same.
+*/
+static status_t
+acpi_thinkpad_nvram_poller(void* data)
+{
+	acpi_thinkpad_device_info* device = (acpi_thinkpad_device_info*)data;
+
+	uint8 previous = read_nvram_byte(TP_NVRAM_ADDR_BRIGHTNESS);
+
+	while (!device->stop_nvram_poller) {
+		snooze(TP_NVRAM_POLL_INTERVAL);
+
+		uint8 current = read_nvram_byte(TP_NVRAM_ADDR_BRIGHTNESS);
+		if (current == previous)
+			continue;
+
+		uint8 previousLevel = previous & TP_NVRAM_MASK_BRIGHTNESS_LEVEL;
+		uint8 currentLevel = current & TP_NVRAM_MASK_BRIGHTNESS_LEVEL;
+		bool toggled = (previous & TP_NVRAM_MASK_BRIGHTNESS_TOGGLE)
+			!= (current & TP_NVRAM_MASK_BRIGHTNESS_TOGGLE);
+		previous = current;
+		device->nvram_brightness = currentLevel;
+
+		TRACE("NVRAM brightness level %u -> %u\n", previousLevel,
+			currentLevel);
+
+		// If the firmware reports the keys through one of the regular
+		// interfaces we only track the level, and leave the key events to it.
+		if (device->brightness_from_firmware)
+			continue;
+
+		if (currentLevel > previousLevel) {
+			for (uint8 i = previousLevel; i < currentLevel; i++)
+				device->QueueKey(KEY_BRIGHTNESS_UP);
+		} else if (currentLevel < previousLevel) {
+			for (uint8 i = currentLevel; i < previousLevel; i++)
+				device->QueueKey(KEY_BRIGHTNESS_DOWN);
+		} else if (toggled) {
+			// The level did not change, so the key was pressed at either end
+			// of the scale.
+			if (currentLevel == 0)
+				device->QueueKey(KEY_BRIGHTNESS_DOWN);
+			else if (currentLevel >= TP_NVRAM_BRIGHTNESS_LEVELS - 1)
+				device->QueueKey(KEY_BRIGHTNESS_UP);
+		}
+	}
+
+	return B_OK;
+}
+
+
+static void
+acpi_thinkpad_video_notify_handler(acpi_handle handle, uint32 value,
+	void* context)
+{
+	acpi_thinkpad_device_info* device = (acpi_thinkpad_device_info*)context;
+	device->HandleVideoEvent(value);
+}
+
+
+/*!	Namespace walk callback looking for the display output device which
+	implements the ACPI backlight control methods.
+*/
+static acpi_status
+acpi_thinkpad_find_video_output(acpi_handle object, uint32 nestingLevel,
+	void* context, void** returnValue)
+{
+	acpi_thinkpad_device_info* device = (acpi_thinkpad_device_info*)context;
+	if (device->video_output != NULL)
+		return B_OK;
+
+	acpi_handle method;
+	if (sAcpi->get_handle(object, "_BCM", &method) != B_OK
+		|| sAcpi->get_handle(object, "_BCL", &method) != B_OK) {
+		return B_OK;
+	}
+
+	device->video_output = object;
+	return B_OK;
+}
+
+
+/*!	Namespace walk callback looking for the ACPI video bus, that is the
+	graphics device implementing display output switching.
+*/
+static acpi_status
+acpi_thinkpad_find_video_bus(acpi_handle object, uint32 nestingLevel,
+	void* context, void** returnValue)
+{
+	acpi_thinkpad_device_info* device = (acpi_thinkpad_device_info*)context;
+	if (device->video_bus != NULL)
+		return B_OK;
+
+	acpi_handle method;
+	if (sAcpi->get_handle(object, "_DOS", &method) != B_OK
+		|| sAcpi->get_handle(object, "_DOD", &method) != B_OK) {
+		return B_OK;
+	}
+
+	// Only use this bus if one of its outputs can control the backlight.
+	sAcpi->walk_namespace(object, ACPI_TYPE_DEVICE, 1,
+		acpi_thinkpad_find_video_output, NULL, device, NULL);
+	if (device->video_output == NULL)
+		return B_OK;
+
+	device->video_bus = object;
+	return B_OK;
+}
+
+
+/*!	Finds the ACPI video device controlling the panel backlight and subscribes
+	to its notifications.
+
+	The firmware of this generation of ThinkPads never reports the brightness
+	keys through the HKEY interface: it considers them handled by the ACPI
+	video extension, the way Windows 8 and later expect. So we have to listen
+	on the video device to see them at all, and tell the firmware through _DOS
+	that we take care of the brightness ourselves.
+*/
+static void
+acpi_thinkpad_init_video(acpi_thinkpad_device_info* device)
+{
+	acpi_handle root;
+	if (sAcpi->get_handle(NULL, "\\", &root) != B_OK) {
+		ERROR("failed to get the ACPI namespace root\n");
+		return;
+	}
+
+	sAcpi->walk_namespace(root, ACPI_TYPE_DEVICE, 8,
+		acpi_thinkpad_find_video_bus, NULL, device, NULL);
+	if (device->video_bus == NULL) {
+		TRACE("no ACPI video device with backlight control found\n");
+		return;
+	}
+
+	char name[256];
+	if (sAcpi->get_name(device->video_bus, 0 /* full pathname */, name,
+			sizeof(name)) == B_OK) {
+		TRACE("ACPI video device: %s\n", name);
+	}
+
+	status_t status = sAcpi->install_notify_handler(device->video_output,
+		ACPI_ALL_NOTIFY, acpi_thinkpad_video_notify_handler, device);
+	if (status != B_OK)
+		ERROR("failed to install the video output notify handler\n");
+
+	status = sAcpi->install_notify_handler(device->video_bus,
+		ACPI_ALL_NOTIFY, acpi_thinkpad_video_notify_handler, device);
+	if (status != B_OK)
+		ERROR("failed to install the video bus notify handler\n");
+
+	// Reading the supported brightness levels is how the firmware learns that
+	// the OS drives the ACPI backlight; some firmwares only start reporting
+	// the brightness keys once _BCL has been evaluated.
+	acpi_data levels;
+	levels.pointer = NULL;
+	levels.length = ACPI_ALLOCATE_BUFFER;
+	if (sAcpi->evaluate_method(device->video_output, "_BCL", NULL, &levels)
+			== B_OK) {
+		acpi_object_type* object = (acpi_object_type*)levels.pointer;
+		if (object != NULL && object->object_type == ACPI_TYPE_PACKAGE) {
+			TRACE("_BCL: %" B_PRIu32 " brightness levels\n",
+				object->package.count);
+		}
+		free(levels.pointer);
+	} else
+		ERROR("_BCL evaluation failed\n");
+
+	acpi_data current;
+	current.pointer = NULL;
+	current.length = ACPI_ALLOCATE_BUFFER;
+	if (sAcpi->evaluate_method(device->video_output, "_BQC", NULL, &current)
+			== B_OK) {
+		free(current.pointer);
+	}
+
+	device->SetVideoDos(ACPI_VIDEO_DOS_OS_BRIGHTNESS);
+}
+
+
+static void
+acpi_thinkpad_uninit_video(acpi_thinkpad_device_info* device)
+{
+	if (device->video_bus == NULL)
+		return;
+
+	// Hand the brightness keys back to the firmware.
+	device->SetVideoDos(0);
+
+	sAcpi->remove_notify_handler(device->video_output, ACPI_ALL_NOTIFY,
+		acpi_thinkpad_video_notify_handler);
+	sAcpi->remove_notify_handler(device->video_bus, ACPI_ALL_NOTIFY,
+		acpi_thinkpad_video_notify_handler);
 }
 
 
@@ -505,7 +831,7 @@ acpi_thinkpad_device_read(void* _cookie, off_t position, void* buffer, size_t* n
 	if (position < 0)
 		return B_BAD_VALUE;
 
-	char status[256];
+	char status[384];
 	snprintf(status, sizeof(status),
 		"ThinkPad ACPI HKEY v0x%" B_PRIx32 "\n"
 		"Hotkey Mask: 0x%08" B_PRIx32 "\n"
@@ -513,6 +839,8 @@ acpi_thinkpad_device_read(void* _cookie, off_t position, void* buffer, size_t* n
 		"Audio Mute LED: %s\n"
 		"Mic Mute LED: %s\n"
 		"Tablet Mode: %s\n"
+		"ACPI video backlight: %s (_DOS 0x%" B_PRIx32 ")\n"
+		"NVRAM brightness level: %u/%u%s\n"
 		"Keyboard open count: %" B_PRId32 "\n",
 		device->hkey_version,
 		device->hotkey_mask,
@@ -521,6 +849,10 @@ acpi_thinkpad_device_read(void* _cookie, off_t position, void* buffer, size_t* n
 		device->mute_led ? "on" : "off",
 		device->mic_mute_led ? "on" : "off",
 		device->tablet_mode ? "active" : "inactive",
+		device->video_bus != NULL ? "found" : "not found",
+		device->video_dos,
+		device->nvram_brightness, TP_NVRAM_BRIGHTNESS_LEVELS - 1,
+		device->brightness_from_firmware ? " (firmware reports keys)" : "",
 		device->open_count);
 
 	size_t len = strlen(status);
@@ -539,7 +871,8 @@ acpi_thinkpad_device_read(void* _cookie, off_t position, void* buffer, size_t* n
 
 
 static status_t
-acpi_thinkpad_device_write(void* cookie, off_t position, const void* buffer, size_t* num_bytes)
+acpi_thinkpad_device_write(void* cookie, off_t position, const void* buffer,
+	size_t* num_bytes)
 {
 	*num_bytes = 0;
 	return B_ERROR;
@@ -795,6 +1128,18 @@ acpi_thinkpad_init_driver(device_node* node, void** driverCookie)
 		device->tablet_mode = (tabletStatus != 0);
 	}
 
+	acpi_thinkpad_init_video(device);
+
+	device->stop_nvram_poller = false;
+	device->nvram_brightness = read_nvram_byte(TP_NVRAM_ADDR_BRIGHTNESS)
+		& TP_NVRAM_MASK_BRIGHTNESS_LEVEL;
+	device->nvram_poller = spawn_kernel_thread(acpi_thinkpad_nvram_poller,
+		"thinkpad nvram poller", B_LOW_PRIORITY, device);
+	if (device->nvram_poller >= 0)
+		resume_thread(device->nvram_poller);
+	else
+		ERROR("failed to start the NVRAM poller\n");
+
 	// Install ACPI notify handler
 	status = device->acpi->install_notify_handler(device->acpi_cookie,
 		ACPI_ALL_NOTIFY, acpi_thinkpad_notify_handler, device);
@@ -813,6 +1158,14 @@ static void
 acpi_thinkpad_uninit_driver(void* driverCookie)
 {
 	acpi_thinkpad_device_info* device = (acpi_thinkpad_device_info*)driverCookie;
+
+	if (device->nvram_poller >= 0) {
+		device->stop_nvram_poller = true;
+		status_t result;
+		wait_for_thread(device->nvram_poller, &result);
+	}
+
+	acpi_thinkpad_uninit_video(device);
 
 	device->acpi->remove_notify_handler(device->acpi_cookie,
 		ACPI_DEVICE_NOTIFY, acpi_thinkpad_notify_handler);
@@ -857,6 +1210,8 @@ acpi_thinkpad_register_child_devices(void* _cookie)
 
 module_dependency module_dependencies[] = {
 	{ B_DEVICE_MANAGER_MODULE_NAME, (module_info**)&sDeviceManager },
+	{ B_ACPI_MODULE_NAME, (module_info**)&sAcpi },
+	{ B_ISA_MODULE_NAME, (module_info**)&sIsa },
 	{}
 };
 
