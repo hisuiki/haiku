@@ -1,0 +1,22 @@
+SubDir HAIKU_TOP src apps brightness ;
+
+UsePrivateHeaders app interface locale shared ;
+
+Application Brightness :
+	Brightness.cpp
+	BrightnessSlider.cpp
+	BrightnessView.cpp
+	BrightnessWindow.cpp
+
+	: be localestub [ TargetLibsupc++ ]
+	: Brightness.rdef
+;
+
+DoCatalogs Brightness :
+	x-vnd.Haiku-Brightness
+	:
+	Brightness.cpp
+	BrightnessSlider.cpp
+	BrightnessView.cpp
+	BrightnessWindow.cpp
+;

@@ -33,6 +33,7 @@ SYSTEM_BIN += [ FFilterByBuildFeatures
 SYSTEM_APPS += [ FFilterByBuildFeatures
 	ActivityMonitor
 	AutoRaise
+	Brightness
 	CodyCam
 	GLInfo@mesa
 	HaikuDepot
@@ -73,6 +74,7 @@ DESKBAR_APPLICATIONS +=
 
 DESKBAR_DESKTOP_APPLETS +=
 	AutoRaise
+	Brightness
 	LaunchBox
 	PowerStatus
 ;
