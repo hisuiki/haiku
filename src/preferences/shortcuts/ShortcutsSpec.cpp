@@ -307,6 +307,11 @@ ShortcutsSpec::GetCellText(int whichColumn) const
 				if (temp == NULL)
 					temp = "";
 			} else if (fKey > 0xFF) {
+				BString fallback = GetFallbackKeyName(fKey);
+				if (!fallback.IsEmpty() && strncmp(fallback.String(), "KeyCode ", 7) != 0) {
+					strlcpy(fScratch, fallback.String(), sizeof(fScratch));
+					return fScratch;
+				}
 				sprintf(fScratch, "#%" B_PRIx32, fKey);
 				return fScratch;
 			}

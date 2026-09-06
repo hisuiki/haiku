@@ -17,6 +17,9 @@
 #include <strings.h>
 
 #include <InterfaceDefs.h>
+#include <usb/USB_hid.h>
+#include <usb/USB_hid_page_consumer.h>
+#include <usb/USB_hid_page_generic_desktop.h>
 
 
 #define NUM_KEYS 128
@@ -183,9 +186,42 @@ GetKeyName(uint32 keyIndex)
 }
 
 
+struct ExtendedKeyLabelMap {
+	const char* fLabel;
+	uint32 fKeyCode;
+};
+
+static const struct ExtendedKeyLabelMap kExtendedKeyLabels[] = {
+	{"Brightness Up",		(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_DISPLAY_BRIGHTNESS_INCREMENT},
+	{"Brightness Down",		(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_DISPLAY_BRIGHTNESS_DECREMENT},
+	{"Volume Up",			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_VOLUME_INCREMENT},
+	{"Volume Down",			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_VOLUME_DECREMENT},
+	{"Mute",				(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_MUTE},
+	{"Keyboard Backlight",	(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_KEYBOARD_BRIGHTNESS_INCREMENT},
+	{"Sleep",				(B_HID_USAGE_PAGE_GENERIC_DESKTOP << 16) | B_HID_UID_GD_SYSTEM_SLEEP},
+	{"Power Off",			(B_HID_USAGE_PAGE_GENERIC_DESKTOP << 16) | B_HID_UID_GD_SYSTEM_POWER_DOWN},
+	{"Wake",				(B_HID_USAGE_PAGE_GENERIC_DESKTOP << 16) | B_HID_UID_GD_SYSTEM_WAKE_UP},
+	{"Play",				(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_PLAY},
+	{"Stop",				(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_STOP},
+	{"Next Track",			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_SCAN_NEXT_TRACK},
+	{"Previous Track",		(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_SCAN_PREVIOUS_TRACK},
+	{"Calculator",			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_AL_CALCULATOR},
+	{"Email",				(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_AL_EMAIL_READER},
+	{"My Computer",			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_AL_LOCAL_MACHINE_BROWSER},
+	{"Search",				(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_AC_SEARCH},
+	{"Web Home",			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_AC_HOME},
+	{"Favorites",			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_AC_BOOKMARKS},
+};
+
+
 BString
 GetFallbackKeyName(uint32 keyCode)
 {
+	for (size_t i = 0; i < sizeof(kExtendedKeyLabels) / sizeof(kExtendedKeyLabels[0]); i++) {
+		if (kExtendedKeyLabels[i].fKeyCode == keyCode)
+			return BString(kExtendedKeyLabels[i].fLabel);
+	}
+
 	BString keyCodeName = "KeyCode ";
 	std::stringstream sstream;
 	sstream << std::hex << keyCode;
@@ -206,6 +242,15 @@ FindKeyCode(const char* keyName)
 {
 	if (strncmp(keyName, "KeyCode ", 7) == 0)
 		return strtoul(keyName + 7, NULL, 16);
+	if (keyName[0] == '#')
+		return strtoul(keyName + 1, NULL, 16);
+	if (strncmp(keyName, "0x", 2) == 0 || strncmp(keyName, "0X", 2) == 0)
+		return strtoul(keyName + 2, NULL, 16);
+
+	for (size_t i = 0; i < sizeof(kExtendedKeyLabels) / sizeof(kExtendedKeyLabels[0]); i++) {
+		if (strcasecmp(keyName, kExtendedKeyLabels[i].fLabel) == 0)
+			return kExtendedKeyLabels[i].fKeyCode;
+	}
 
 	for (uint8 i = 0; i < NUM_KEYS; i++) {
 		if ((keyDescriptions[i])

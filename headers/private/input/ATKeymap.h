@@ -221,7 +221,7 @@ const static uint32 kATKeycodeMap[] = {
 	0x21,   // Page Up
 	0x00,   // UNMAPPED
 	0x61,   // Left Arrow
-	0x00,   // UNMAPPED
+	HID_CONSUMER(DISPLAY_BRIGHTNESS_DECREMENT), // media: Brightness down
 	0x63,   // Right Arrow
 	0x00,   // UNMAPPED
 	0x35,   // End
@@ -229,7 +229,7 @@ const static uint32 kATKeycodeMap[] = {
 	0x36,   // Page Down
 	0x1f,   // Insert		210
 	0x34,   // Delete
-	0x00,   // UNMAPPED
+	HID_CONSUMER(DISPLAY_BRIGHTNESS_INCREMENT), // media: Brightness up
 	0x00,   // UNMAPPED
 	0x00,   // UNMAPPED
 	0x00,   // UNMAPPED

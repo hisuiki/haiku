@@ -348,6 +348,7 @@ SYSTEM_ADD_ONS_DRIVERS_POWER = [ FFilterByBuildFeatures
 	x86,x86_64 @{
 		acpi_button
 		acpi_thermal
+		acpi_thinkpad
 		amd_thermal
 		pch_thermal
 	}@ # x86,x86_64

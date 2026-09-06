@@ -1,0 +1,8 @@
+SubDir HAIKU_TOP src add-ons kernel drivers power acpi_thinkpad ;
+
+UsePrivateHeaders input ;
+UsePrivateKernelHeaders ;
+
+KernelAddon acpi_thinkpad :
+	acpi_thinkpad.cpp
+	;

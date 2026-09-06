@@ -221,6 +221,10 @@ ShortcutsWindow::ShortcutsWindow()
 		_AddNewSpec("/bin/setvolume -t", (B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_MUTE);
 		_AddNewSpec("/bin/setvolume -i", (B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_VOLUME_INCREMENT);
 		_AddNewSpec("/bin/setvolume -d", (B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_VOLUME_DECREMENT);
+		_AddNewSpec("/bin/screenmode -b +0.05",
+			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_DISPLAY_BRIGHTNESS_INCREMENT);
+		_AddNewSpec("/bin/screenmode -b -0.05",
+			(B_HID_USAGE_PAGE_CONSUMER << 16) | B_HID_UID_CON_DISPLAY_BRIGHTNESS_DECREMENT);
 		fLastSaved = BEntry(&keySetRef);
 		PostMessage(SAVE_KEYSET);
 	}
