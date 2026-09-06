@@ -4154,6 +4154,40 @@ iwm_firmware_load_chunk(struct iwm_softc *sc, uint32_t dst_addr,
 	err = 0;
 	while (!sc->sc_fw_chunk_done) {
 		err = tsleep_nsec(&sc->sc_fw, 0, "iwmfw", SEC_TO_NSEC(1));
+		if (err) {
+#ifdef __HAIKU__
+			/*
+			 * Some machines, including the ThinkPad P50 with an Intel
+			 * Wireless 8260, occasionally fail to deliver the service-channel
+			 * MSI used while the firmware is being loaded.  The transfer has
+			 * nevertheless completed and the cause remains latched in the
+			 * device.  Since firmware sections are loaded synchronously, it is
+			 * safe to recover the lost notification here.
+			 */
+			uint32_t inta = IWM_READ(sc, IWM_CSR_INT);
+			uint32_t fh = IWM_READ(sc, IWM_CSR_FH_INT_STATUS);
+
+			if ((inta & IWM_CSR_INT_BIT_FH_TX) != 0
+				|| (fh & IWM_CSR_FH_INT_TX_MASK) != 0) {
+				IWM_WRITE(sc, IWM_CSR_INT, IWM_CSR_INT_BIT_FH_TX);
+				IWM_WRITE(sc, IWM_CSR_FH_INT_STATUS,
+				    IWM_CSR_FH_INT_TX_MASK);
+				sc->sc_fw_chunk_done = 1;
+				err = 0;
+			} else {
+				printf("%s: firmware DMA timeout: paddr 0x%llx, "
+				    "inta 0x%x, mask 0x%x, fh 0x%x, txcfg 0x%x, "
+				    "txsts 0x%x, gp 0x%x\n", DEVNAME(sc),
+				    (unsigned long long)dma->paddr, inta,
+				    IWM_READ(sc, IWM_CSR_INT_MASK), fh,
+				    IWM_READ(sc, IWM_FH_TCSR_CHNL_TX_CONFIG_REG(
+				    IWM_FH_SRVC_CHNL)),
+				    IWM_READ(sc, IWM_FH_TCSR_CHNL_TX_BUF_STS_REG(
+				    IWM_FH_SRVC_CHNL)),
+				    IWM_READ(sc, IWM_CSR_GP_CNTRL));
+			}
+#endif
+		}
 		if (err)
 			break;
 	}
