@@ -2,7 +2,7 @@
 #define _BLUETOOTH_DEBUG_SERVER_H_
 
 #ifndef DEBUG
-  #define DEBUG 3
+  #define DEBUG 0
 #endif
 
 #include <Debug.h>

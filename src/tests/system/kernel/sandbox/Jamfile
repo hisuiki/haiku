@@ -1,0 +1,21 @@
+SubDir HAIKU_TOP src tests system kernel sandbox ;
+
+SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src system sandbox ] ;
+
+# Two tests, because the two things they check fail in different ways.
+#
+# The logic test compiles the confinement logic straight into itself and calls
+# it as ordinary functions. Nothing it does can be refused, so a mistake shows
+# up as a wrong answer that it can print.
+SimpleTest sandbox_logic_test :
+	sandbox_logic_test.cpp
+	pledge.cpp
+	syscall_filter.cpp
+	;
+
+# The integration test goes through the kernel, where a mistake can instead
+# take the process with it. It runs every case that expects to be refused in a
+# child for that reason.
+SimpleTest sandbox_test :
+	sandbox_test.cpp
+	;

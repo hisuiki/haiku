@@ -487,6 +487,11 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
 
 	struct team_debug_info debug_info;
 
+	struct team_sandbox* sandbox;	// pledge/unveil/filter state, or NULL for
+									// an unconfined team; protected by fLock
+									// for installation, by its own lock for
+									// everything after that
+
 	bigtime_t		start_time;
 
 	// protected by time_lock
@@ -864,5 +869,8 @@ using BKernel::ProcessGroupList;
 #endif
 #define	THREAD_FLAGS_OLD_SIGMASK			0x4000
 	// the thread has an old sigmask to be restored
+#define	THREAD_FLAGS_SANDBOXED				0x8000
+	// the thread's team carries confinement, so its syscalls must be checked
+	// against it (computed flag for optimization purposes)
 
 #endif	/* _KERNEL_THREAD_TYPES_H */

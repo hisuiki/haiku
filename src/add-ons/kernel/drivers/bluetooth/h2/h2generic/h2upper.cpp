@@ -178,33 +178,6 @@ sched_tx_processing(bt_usb_dev* bdev)
 }
 
 
-#if 0
-// DEPRECATED
-status_t
-post_packet_up(bt_usb_dev* bdev, bt_packet_t type, void* buf)
-{
-	status_t err = B_ERROR;
-
-	debugf("Frame up type=%d\n", type);
-
-	if (type == BT_EVENT) {
-		snet_buffer* snbuf = (snet_buffer*)buf;
-		btCoreData->PostEvent(bdev->ndev, snb_get(snbuf),
-			(size_t)snb_size(snbuf));
-		snb_park(&bdev->snetBufferRecycleTrash, snbuf);
-		debugf("to btDataCore len=%d\n", snb_size(snbuf));
-	} else {
-		net_buffer* nbuf = (net_buffer*) buf;
-		// No need to free the buffer at allocation is gonna be reused
-		btDevices->receive_data(bdev->ndev, &nbuf);
-		TRACE("to net_device\n");
-	}
-
-	return err;
-}
-#endif
-
-
 status_t
 send_packet(hci_id hid, bt_packet_t type, net_buffer* nbuf)
 {

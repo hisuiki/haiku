@@ -18,3 +18,7 @@ KernelAddon <driver>kdl :
 KernelAddon <driver>test :
 	test.c
 	;
+
+KernelAddon <driver>vtd :
+	vtd.cpp
+	;

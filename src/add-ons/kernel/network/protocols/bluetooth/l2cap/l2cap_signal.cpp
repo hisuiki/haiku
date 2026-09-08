@@ -382,10 +382,67 @@ send_l2cap_command(HciConnection* conn, uint8 code, uint8 ident,
 
 
 /*!	A Low Energy peripheral asks the central to adopt the connection parameters
-	it prefers. Accepting keeps it from re-asking until its request times out;
-	the parameters requested at connect time are already suitable for an input
-	device, so nothing else is renegotiated here.
+	it prefers. The central must both accept the L2CAP request and ask the
+	controller to apply it; merely acknowledging the request leaves the original,
+	often much slower, connection interval in effect.
 */
+static bool
+valid_le_connection_parameters(uint16 minInterval, uint16 maxInterval,
+	uint16 latency, uint16 supervisionTimeout)
+{
+	// Vol 3, Part A, section 4.20: interval units are 1.25 ms and the
+	// supervision timeout is in 10 ms units.
+	return minInterval >= 0x0006 && maxInterval <= 0x0c80
+		&& minInterval <= maxInterval && latency <= 0x01f3
+		&& supervisionTimeout >= 0x000a
+		&& supervisionTimeout <= 0x0c80
+		&& (uint32)supervisionTimeout * 4
+			> (uint32)(latency + 1) * maxInterval;
+}
+
+
+static status_t
+update_le_connection_parameters(HciConnection* connection,
+	uint16 minInterval, uint16 maxInterval, uint16 latency,
+	uint16 supervisionTimeout)
+{
+	hci_command_header header;
+	hci_cp_le_conn_update parameters;
+
+	parameters.handle = htole16(connection->handle);
+	parameters.min_interval = htole16(minInterval);
+	parameters.max_interval = htole16(maxInterval);
+	parameters.latency = htole16(latency);
+	parameters.supervision_timeout = htole16(supervisionTimeout);
+	parameters.min_ce_length = 0;
+	parameters.max_ce_length = 0;
+
+	header.opcode = htole16(PACK_OPCODE(OGF_LE_CONTROL,
+		OCF_LE_CONN_UPDATE));
+	header.clen = sizeof(parameters);
+
+	net_buffer* command = gBufferModule->create(128);
+	if (command == NULL)
+		return B_NO_MEMORY;
+
+	void* payload = NULL;
+	status_t status = gBufferModule->prepend_size(command,
+		sizeof(header) + sizeof(parameters), &payload);
+	if (status != B_OK || payload == NULL) {
+		gBufferModule->free(command);
+		return status != B_OK ? status : B_ERROR;
+	}
+
+	memcpy(payload, &header, sizeof(header));
+	memcpy((uint8*)payload + sizeof(header), &parameters, sizeof(parameters));
+
+	status = btDevices->PostCommand(connection->Hid, command);
+	if (status != B_OK)
+		gBufferModule->free(command);
+	return status;
+}
+
+
 status_t
 handle_le_signaling_command(HciConnection* conn, net_buffer* buffer)
 {
@@ -410,16 +467,44 @@ handle_le_signaling_command(HciConnection* conn, net_buffer* buffer)
 		return B_OK;
 	}
 
+	uint16 minInterval = 0;
+	uint16 maxInterval = 0;
+	uint16 latency = 0;
+	uint16 supervisionTimeout = 0;
+	{
+		NetBufferHeaderReader<l2cap_connection_parameter_update_req> request(
+			buffer);
+		if (request.Status() == B_OK) {
+			minInterval = le16toh(request->min_interval);
+			maxInterval = le16toh(request->max_interval);
+			latency = le16toh(request->latency);
+			supervisionTimeout = le16toh(request->supervision_timeout);
+		}
+	}
+
+	bool valid = valid_le_connection_parameters(minInterval, maxInterval,
+		latency, supervisionTimeout);
+	TRACE("LE connection %#x parameter request: interval %u-%u (1.25 ms "
+		"units), latency %u, timeout %u ms (%s)\n", conn->handle,
+		minInterval, maxInterval, latency,
+		supervisionTimeout * 10, valid ? "accepted" : "rejected");
+
 	gBufferModule->free(buffer);
 
 	uint8 replyCode = 0;
 	net_buffer* reply = make_l2cap_connection_parameter_update_rsp(replyCode,
-		l2cap_connection_parameter_update_rsp::RESULT_ACCEPTED);
+		valid ? l2cap_connection_parameter_update_rsp::RESULT_ACCEPTED
+			: l2cap_connection_parameter_update_rsp::RESULT_REJECTED);
 	if (reply == NULL)
 		return ENOMEM;
 
-	return send_l2cap_command_on_channel(conn, replyCode, ident, reply,
+	status_t status = send_l2cap_command_on_channel(conn, replyCode, ident, reply,
 		L2CAP_LE_SIGNALING_CID);
+	if (status != B_OK || !valid)
+		return status;
+
+	return update_le_connection_parameters(conn, minInterval, maxInterval,
+		latency, supervisionTimeout);
 }
 
 

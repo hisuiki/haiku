@@ -35,6 +35,8 @@
 
 #define INTEL_RSA_HEADER_SIZE	644
 #define INTEL_COMMAND_TIMEOUT	5000000
+#define INTEL_VERSION_RETRIES	5
+#define INTEL_VERSION_RETRY_DELAY	100000
 
 
 struct intel_version {
@@ -73,10 +75,27 @@ struct intel_boot_params {
 
 
 struct intel_event_wait {
-	sem_id semaphore;
-	status_t status;
-	size_t length;
-	uint8 data[260];
+	sem_id			semaphore;
+	status_t		status;
+	size_t			length;
+	bool			pending;
+	bool			ready;
+	uint8			data[260];
+};
+
+
+/*!	The two endpoints an event can arrive on.
+
+	While the controller runs its bootloader it answers the secure send
+	command on the bulk endpoint and everything else on the interrupt
+	endpoint, so a command has to listen on both of them and take whichever
+	one replies. The Linux btusb driver feeds what arrives on either endpoint
+	into the same event handling for the same reason.
+*/
+struct intel_event_source {
+	sem_id				semaphore;
+	intel_event_wait	interrupt;
+	intel_event_wait	bulk;
 };
 
 
@@ -87,37 +106,236 @@ intel_event_complete(void* cookie, status_t status, void* data,
 	intel_event_wait* wait = (intel_event_wait*)cookie;
 	wait->status = status;
 	wait->length = min_c(actualLength, sizeof(wait->data));
-	if (status == B_OK && wait->length != 0)
-		memcpy(wait->data, data, wait->length);
+	wait->pending = false;
+	wait->ready = true;
 	release_sem_etc(wait->semaphore, 1, B_DO_NOT_RESCHEDULE);
 }
 
 
-static status_t
-intel_wait_for_event(bt_usb_dev* device, intel_event_wait* wait)
-{
-	wait->semaphore = create_sem(0, "Intel Bluetooth firmware event");
-	if (wait->semaphore < B_OK)
-		return wait->semaphore;
+struct intel_transfer_wait {
+	sem_id			semaphore;
+	status_t		status;
+	size_t			length;
+};
 
-	wait->status = B_ERROR;
-	wait->length = 0;
-	status_t status = usb->queue_interrupt(device->intr_in_ep->handle,
-		wait->data, sizeof(wait->data), intel_event_complete, wait);
+
+static void
+intel_transfer_complete(void* cookie, status_t status, void* data,
+	size_t actualLength)
+{
+	intel_transfer_wait* wait = (intel_transfer_wait*)cookie;
+	wait->status = status;
+	wait->length = actualLength;
+	release_sem_etc(wait->semaphore, 1, B_DO_NOT_RESCHEDULE);
+}
+
+
+/*!	Sends a command packet through the bulk out endpoint.
+
+	While the controller runs its bootloader it does not answer the secure
+	send command on the control endpoint, so the firmware download has to go
+	through the bulk endpoint instead. The Linux btusb driver treats the
+	command the same way.
+*/
+static status_t
+intel_bulk_command(bt_usb_dev* device, const void* command, size_t length)
+{
+	if (device->bulk_out_ep == NULL)
+		return B_NOT_SUPPORTED;
+
+	intel_transfer_wait wait;
+	wait.semaphore = create_sem(0, "Intel Bluetooth command sent");
+	if (wait.semaphore < B_OK)
+		return wait.semaphore;
+
+	wait.status = B_ERROR;
+	wait.length = 0;
+	status_t status = usb->queue_bulk(device->bulk_out_ep->handle,
+		(void*)command, length, intel_transfer_complete, &wait);
 	if (status == B_OK) {
-		status = acquire_sem_etc(wait->semaphore, 1, B_RELATIVE_TIMEOUT,
+		status = acquire_sem_etc(wait.semaphore, 1, B_RELATIVE_TIMEOUT,
 			INTEL_COMMAND_TIMEOUT);
 	}
 
 	if (status != B_OK) {
-		usb->cancel_queued_transfers(device->intr_in_ep->handle);
-		acquire_sem_etc(wait->semaphore, 1, B_RELATIVE_TIMEOUT,
+		usb->cancel_queued_transfers(device->bulk_out_ep->handle);
+		acquire_sem_etc(wait.semaphore, 1, B_RELATIVE_TIMEOUT,
 			INTEL_COMMAND_TIMEOUT);
 	} else
-		status = wait->status;
+		status = wait.status;
 
-	delete_sem(wait->semaphore);
+	if (status == B_OK && wait.length != length) {
+		ERROR("Intel bulk command sent %" B_PRIuSIZE " of %" B_PRIuSIZE
+			" bytes\n", wait.length, length);
+	}
+
+	delete_sem(wait.semaphore);
 	return status;
+}
+
+
+/*!	Sends a command packet on either of the two endpoints that can carry one.
+
+	Commands normally travel on the control endpoint, but the bootloader wants
+	the secure send command on the bulk endpoint instead.
+*/
+static status_t
+intel_send_command_packet(bt_usb_dev* device, const uint8* command,
+	size_t length, bool useControlEndpoint)
+{
+	if (!useControlEndpoint)
+		return intel_bulk_command(device, command, length);
+
+	size_t actualLength = 0;
+	return usb->send_request(device->dev, USB_TYPE_CLASS, 0, 0, 0, length,
+		(void*)command, &actualLength);
+}
+
+
+/*!	Logs the raw bytes of an HCI event.
+
+	The only way to tell a truncated answer from an error status is to look
+	at what actually arrived, and which endpoint it arrived on matters while
+	the controller runs its bootloader.
+*/
+static void
+intel_dump_packet(const char* what, uint16 opcode, const uint8* data,
+	size_t length)
+{
+	char hex[3 * 24 + 1];
+	size_t shown = min_c(length, (size_t)24);
+	for (size_t i = 0; i < shown; i++)
+		snprintf(hex + 3 * i, 4, " %02x", data[i]);
+	hex[3 * shown] = '\0';
+	ERROR("%s for 0x%04x: %" B_PRIuSIZE " bytes%s%s\n", what, opcode, length,
+		hex, length > shown ? " ..." : "");
+}
+
+
+static status_t
+intel_queue_event(bt_usb_dev* device, intel_event_wait* wait, bool useBulk)
+{
+	wait->status = B_ERROR;
+	wait->length = 0;
+	wait->ready = false;
+	wait->pending = true;
+
+	status_t status;
+	if (useBulk) {
+		status = usb->queue_bulk(device->bulk_in_ep->handle, wait->data,
+			sizeof(wait->data), intel_event_complete, wait);
+	} else {
+		status = usb->queue_interrupt(device->intr_in_ep->handle, wait->data,
+			sizeof(wait->data), intel_event_complete, wait);
+	}
+
+	if (status != B_OK)
+		wait->pending = false;
+	return status;
+}
+
+
+static status_t
+intel_event_source_init(intel_event_source* source, bt_usb_dev* device)
+{
+	memset(source, 0, sizeof(*source));
+	source->semaphore = create_sem(0, "Intel Bluetooth firmware event");
+	if (source->semaphore < B_OK)
+		return source->semaphore;
+
+	source->interrupt.semaphore = source->semaphore;
+	source->bulk.semaphore = source->semaphore;
+
+	status_t status = intel_queue_event(device, &source->interrupt, false);
+	if (status != B_OK) {
+		delete_sem(source->semaphore);
+		return status;
+	}
+
+	// Listening on the bulk endpoint as well is what makes the firmware
+	// download work, but a controller which only ever answers on the
+	// interrupt endpoint still gets to finish its setup without it.
+	if (device->bulk_in_ep != NULL)
+		intel_queue_event(device, &source->bulk, true);
+
+	return B_OK;
+}
+
+
+static void
+intel_event_source_cleanup(intel_event_source* source, bt_usb_dev* device)
+{
+	if (source->interrupt.pending)
+		usb->cancel_queued_transfers(device->intr_in_ep->handle);
+	if (source->bulk.pending)
+		usb->cancel_queued_transfers(device->bulk_in_ep->handle);
+
+	// The transfers write into this structure, so none of them may still be
+	// on its way out once it goes out of scope.
+	while (source->interrupt.pending || source->bulk.pending) {
+		if (acquire_sem_etc(source->semaphore, 1, B_RELATIVE_TIMEOUT,
+				INTEL_COMMAND_TIMEOUT) != B_OK) {
+			ERROR("Intel Bluetooth event transfers did not come back\n");
+			break;
+		}
+	}
+
+	delete_sem(source->semaphore);
+}
+
+
+/*!	Waits for the next event on either of the two endpoints. */
+static status_t
+intel_event_source_wait(intel_event_source* source, intel_event_wait** _event)
+{
+	status_t status = acquire_sem_etc(source->semaphore, 1,
+		B_RELATIVE_TIMEOUT, INTEL_COMMAND_TIMEOUT);
+	if (status != B_OK)
+		return status;
+
+	intel_event_wait* event = NULL;
+	if (source->interrupt.ready)
+		event = &source->interrupt;
+	else if (source->bulk.ready)
+		event = &source->bulk;
+	if (event == NULL)
+		return B_ERROR;
+
+	event->ready = false;
+	*_event = event;
+	return event->status;
+}
+
+
+/*! Waits for an HCI event, ignoring stale ACL data on the bulk endpoint.
+
+	The same bulk endpoint carries command replies in Intel bootloader mode and
+	ACL data in operational mode. A warm reboot can leave ACL packets queued in
+	the controller; those must not be mistaken for the reply to Read Version.
+*/
+static status_t
+intel_event_source_wait_for_hci(intel_event_source* source,
+	bt_usb_dev* device, intel_event_wait** _event)
+{
+	for (;;) {
+		intel_event_wait* event;
+		status_t status = intel_event_source_wait(source, &event);
+		if (status != B_OK)
+			return status;
+
+		if (event != &source->bulk || (event->length != 0
+				&& (event->data[0] == HCI_COMMAND_COMPLETE
+					|| event->data[0] == HCI_VENDOR_EVENT))) {
+			*_event = event;
+			return B_OK;
+		}
+
+		intel_dump_packet("discarding stale bulk data", 0, event->data,
+			event->length);
+		status = intel_queue_event(device, event, true);
+		if (status != B_OK)
+			return status;
+	}
 }
 
 
@@ -131,82 +349,73 @@ intel_command(bt_usb_dev* device, uint16 opcode, const void* parameters,
 	command[2] = parameterLength;
 	if (parameterLength != 0)
 		memcpy(command + 3, parameters, parameterLength);
+	size_t commandLength = sizeof(uint16) + sizeof(uint8) + parameterLength;
 
-	intel_event_wait wait;
-	wait.semaphore = create_sem(0, "Intel Bluetooth command event");
-	if (wait.semaphore < B_OK)
-		return wait.semaphore;
-	wait.status = B_ERROR;
-	wait.length = 0;
-	size_t actualLength = 0;
+	intel_event_source source;
+	status_t status = intel_event_source_init(&source, device);
+	if (status != B_OK)
+		return status;
 
-	status_t status = usb->queue_interrupt(device->intr_in_ep->handle,
-		wait.data, sizeof(wait.data), intel_event_complete, &wait);
+	// The bootloader wants the secure send command on the bulk endpoint;
+	// every other command goes to the control endpoint.
+	status = intel_send_command_packet(device, command, commandLength,
+		opcode != INTEL_SECURE_SEND);
 	if (status != B_OK)
 		goto done;
 
-	status = usb->send_request(device->dev, USB_TYPE_CLASS, 0, 0, 0,
-		sizeof(uint16) + sizeof(uint8) + parameterLength, command,
-		&actualLength);
-	if (status != B_OK)
-		goto cancel;
-
 	for (;;) {
-		status = acquire_sem_etc(wait.semaphore, 1, B_RELATIVE_TIMEOUT,
-			INTEL_COMMAND_TIMEOUT);
+		intel_event_wait* event;
+		status = intel_event_source_wait_for_hci(&source, device, &event);
 		if (status != B_OK) {
 			ERROR("Intel command 0x%04x event wait failed: %s\n", opcode,
 				strerror(status));
-			goto cancel;
-		}
-		if (wait.status != B_OK) {
-			status = wait.status;
 			goto done;
 		}
 
-		if (wait.length >= 7 && wait.data[0] == HCI_VENDOR_EVENT
-			&& wait.data[2] == INTEL_DOWNLOAD_COMPLETE) {
+		if (event->length >= 7 && event->data[0] == HCI_VENDOR_EVENT
+			&& event->data[2] == INTEL_DOWNLOAD_COMPLETE) {
+			// The controller announces the end of the download on its own,
+			// possibly before the last fragment has been acknowledged.
 			device->intelDownloadComplete = true;
-			device->intelDownloadResult = wait.data[3];
-			wait.status = B_ERROR;
-			wait.length = 0;
-			status = usb->queue_interrupt(device->intr_in_ep->handle,
-				wait.data, sizeof(wait.data), intel_event_complete, &wait);
+			device->intelDownloadResult = event->data[3];
+			status = intel_queue_event(device, event,
+				event == &source.bulk);
 			if (status != B_OK)
 				goto done;
 			continue;
 		}
 
-		if (wait.length < 5 || wait.data[0] != HCI_COMMAND_COMPLETE
-			|| wait.data[3] != (opcode & 0xff)
-			|| wait.data[4] != (opcode >> 8)) {
-			ERROR("Intel command 0x%04x returned an unexpected event\n",
-				opcode);
+		if (event->length < 5 || event->data[0] != HCI_COMMAND_COMPLETE
+			|| event->data[3] != (opcode & 0xff)
+			|| event->data[4] != (opcode >> 8)) {
+			intel_dump_packet("unexpected event", opcode, event->data,
+				event->length);
 			status = B_BAD_DATA;
 			goto done;
 		}
+
+		if (opcode != INTEL_SECURE_SEND) {
+			intel_dump_packet("command complete", opcode, event->data,
+				event->length);
+		}
+
+		size_t actualLength = event->length - 5;
+		if (responseLength != NULL) {
+			if (response != NULL && actualLength > *responseLength) {
+				status = B_BUFFER_OVERFLOW;
+				goto done;
+			}
+			if (response != NULL && actualLength != 0)
+				memcpy(response, event->data + 5, actualLength);
+			*responseLength = actualLength;
+		}
+
+		status = B_OK;
 		break;
 	}
 
-	actualLength = wait.length - 5;
-	if (responseLength != NULL) {
-		if (response != NULL && actualLength > *responseLength) {
-			status = B_BUFFER_OVERFLOW;
-			goto done;
-		}
-		if (response != NULL && actualLength != 0)
-			memcpy(response, wait.data + 5, actualLength);
-		*responseLength = actualLength;
-	}
-	status = B_OK;
-	goto done;
-
-cancel:
-	usb->cancel_queued_transfers(device->intr_in_ep->handle);
-	acquire_sem_etc(wait.semaphore, 1, B_RELATIVE_TIMEOUT,
-		INTEL_COMMAND_TIMEOUT);
 done:
-	delete_sem(wait.semaphore);
+	intel_event_source_cleanup(&source, device);
 	return status;
 }
 
@@ -350,6 +559,34 @@ intel_upload_firmware(bt_usb_dev* device, const uint8* firmware,
 }
 
 
+/*!	Takes the next event and checks that it is the vendor event we want. */
+static status_t
+intel_expect_vendor_event(intel_event_source* source, bt_usb_dev* device,
+	uint8 subtype)
+{
+	intel_event_wait* event;
+	status_t status = intel_event_source_wait_for_hci(source, device, &event);
+	if (status != B_OK) {
+		ERROR("waiting for the Intel vendor event %u failed: %s\n", subtype,
+			strerror(status));
+		return status;
+	}
+
+	intel_dump_packet("vendor event", subtype, event->data, event->length);
+	if (event->length < 3 || event->data[0] != HCI_VENDOR_EVENT
+		|| event->data[2] != subtype) {
+		return B_BAD_DATA;
+	}
+
+	// Both events this is used for carry a status byte the controller uses to
+	// report that it did not like what it was given.
+	if (event->length < 4 || event->data[3] != 0)
+		return B_ERROR;
+
+	return B_OK;
+}
+
+
 static status_t
 intel_wait_for_vendor_event(bt_usb_dev* device, uint8 subtype)
 {
@@ -358,36 +595,96 @@ intel_wait_for_vendor_event(bt_usb_dev* device, uint8 subtype)
 		return device->intelDownloadResult == 0 ? B_OK : B_ERROR;
 	}
 
-	intel_event_wait wait;
-	status_t status = intel_wait_for_event(device, &wait);
+	intel_event_source source;
+	status_t status = intel_event_source_init(&source, device);
 	if (status != B_OK)
 		return status;
-	if (wait.length < 3 || wait.data[0] != HCI_VENDOR_EVENT
-		|| wait.data[2] != subtype) {
-		return B_BAD_DATA;
-	}
-	if (subtype == INTEL_DOWNLOAD_COMPLETE
-		&& (wait.length < 7 || wait.data[3] != 0)) {
-		return B_ERROR;
-	}
-	return B_OK;
+
+	status = intel_expect_vendor_event(&source, device, subtype);
+	intel_event_source_cleanup(&source, device);
+	return status;
+}
+
+
+/*!	Boots the controller into the firmware that was just downloaded.
+
+	The reset command is not answered with a command complete event: the
+	controller restarts and announces itself with the boot complete event
+	instead, so waiting for a command complete would only ever time out. The
+	Linux btusb driver makes up the missing event for its own flow control.
+
+	The transfers the event will arrive on are queued before the command goes
+	out, so that a controller which comes back quickly cannot slip past us.
+*/
+static status_t
+intel_boot_firmware(bt_usb_dev* device, uint32 bootAddress)
+{
+	uint8 command[3 + 8] = { INTEL_RESET & 0xff, INTEL_RESET >> 8, 8,
+		0x00, 0x01, 0x00, 0x01 };
+	uint32 littleEndianBootAddress = B_HOST_TO_LENDIAN_INT32(bootAddress);
+	memcpy(command + 7, &littleEndianBootAddress,
+		sizeof(littleEndianBootAddress));
+
+	intel_event_source source;
+	status_t status = intel_event_source_init(&source, device);
+	if (status != B_OK)
+		return status;
+
+	status = intel_send_command_packet(device, command, sizeof(command),
+		true);
+	if (status == B_OK)
+		status = intel_expect_vendor_event(&source, device,
+			INTEL_BOOT_COMPLETE);
+
+	intel_event_source_cleanup(&source, device);
+	return status;
 }
 
 
 status_t
 intel_bluetooth_setup(bt_usb_dev* device)
 {
+	// The legacy version command of this generation of controllers takes no
+	// parameter; the 0xff parameter selects the TLV answer of the later ones.
+	// The controller answers the first commands it is sent with "command
+	// disallowed" for as long as it is still settling after having been
+	// configured, so it gets a few tries before we give up on it.
 	intel_version version;
-	size_t responseLength = sizeof(version);
-	uint8 parameter = 0xff;
-	status_t status = intel_command(device, INTEL_READ_VERSION, &parameter,
-		1, &version, &responseLength);
+	size_t responseLength = 0;
+	status_t status = B_ERROR;
+	for (int attempt = 0; attempt < INTEL_VERSION_RETRIES; attempt++) {
+		if (attempt != 0)
+			snooze(INTEL_VERSION_RETRY_DELAY);
+
+		memset(&version, 0, sizeof(version));
+		responseLength = sizeof(version);
+		status = intel_command(device, INTEL_READ_VERSION, NULL, 0,
+			&version, &responseLength);
+		if (status == B_OK && responseLength == sizeof(version)
+			&& version.status == 0) {
+			break;
+		}
+
+		ERROR("could not read Intel Bluetooth version (%s), attempt %d: %"
+			B_PRIuSIZE " of %" B_PRIuSIZE " bytes, HCI status 0x%02x\n",
+			strerror(status), attempt + 1, responseLength, sizeof(version),
+			version.status);
+	}
+
 	if (status != B_OK || responseLength != sizeof(version)
 		|| version.status != 0 || version.hardwarePlatform != 0x37) {
-		ERROR("could not read Intel Bluetooth version (%s)\n",
-			strerror(status));
+		ERROR("giving up on the Intel Bluetooth version, platform 0x%02x, "
+			"hw variant 0x%02x, fw variant 0x%02x\n", version.hardwarePlatform,
+			version.hardwareVariant, version.firmwareVariant);
 		return status == B_OK ? B_BAD_DATA : status;
 	}
+
+	ERROR("Intel Bluetooth controller: hw variant 0x%02x revision 0x%02x, "
+		"fw variant 0x%02x revision 0x%02x, build %u week %u year %u, "
+		"patch %u\n", version.hardwareVariant, version.hardwareRevision,
+		version.firmwareVariant, version.firmwareRevision,
+		version.firmwareBuildNumber, version.firmwareBuildWeek,
+		version.firmwareBuildYear, version.firmwarePatchNumber);
 
 	if (version.firmwareVariant == 0x23)
 		return B_OK;
@@ -439,14 +736,7 @@ intel_bluetooth_setup(bt_usb_dev* device)
 		return status;
 	}
 
-	uint8 reset[8] = { 0x00, 0x01, 0x00, 0x01 };
-	uint32 littleEndianBootAddress = B_HOST_TO_LENDIAN_INT32(bootAddress);
-	memcpy(reset + 4, &littleEndianBootAddress, sizeof(littleEndianBootAddress));
-	responseLength = 0;
-	status = intel_command(device, INTEL_RESET, reset, sizeof(reset), NULL,
-		&responseLength);
-	if (status == B_OK)
-		status = intel_wait_for_vendor_event(device, INTEL_BOOT_COMPLETE);
+	status = intel_boot_firmware(device, bootAddress);
 	if (status != B_OK) {
 		ERROR("booting Intel Bluetooth firmware failed: %s\n",
 			strerror(status));

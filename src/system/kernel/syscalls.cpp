@@ -41,6 +41,7 @@
 #include <posix/xsi_semaphore.h>
 #include <real_time_clock.h>
 #include <safemode.h>
+#include <sandbox.h>
 #include <sem.h>
 #include <sys/resource.h>
 #include <system_profiler.h>

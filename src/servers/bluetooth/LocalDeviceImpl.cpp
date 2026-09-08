@@ -17,13 +17,38 @@
 #include <bluetooth/LinkKeyUtils.h>
 #include <bluetooth/HCI/btHCI_event.h>
 
-#include <ConnectionIncoming.h>
 #include <PincodeWindow.h>
 
+#include <Catalog.h>
 #include <FindDirectory.h>
+#include <Notification.h>
 #include <BluetoothAudio.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <new>
+
+
+#undef B_TRANSLATION_CONTEXT
+#define B_TRANSLATION_CONTEXT "Bluetooth server"
+
+
+static void
+notify_connection(const ServerRemoteDevice* device, const bdaddr_t& address)
+{
+	BString name = device != NULL ? device->friendly_name : "";
+	if (name.IsEmpty())
+		name = bdaddrUtils::ToString(address);
+
+	BString content(B_TRANSLATE("%device% is connected."));
+	content.ReplaceFirst("%device%", name);
+
+	BNotification notification(B_INFORMATION_NOTIFICATION);
+	notification.SetGroup(B_TRANSLATE("Bluetooth"));
+	notification.SetTitle(B_TRANSLATE("Bluetooth device connected"));
+	notification.SetContent(content);
+	notification.SetMessageID(bdaddrUtils::ToString(address));
+	notification.Send();
+}
 
 
 #if 0
@@ -118,8 +143,10 @@ LocalDeviceImpl::SaveRemoteDevices()
 	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) == B_OK) {
 		path.Append("Bluetooth_paired_devices");
 		BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
-		if (file.InitCheck()==B_OK)
+		if (file.InitCheck()==B_OK) {
+			chmod(path.Path(), S_IRUSR | S_IWUSR);
 			devices.Flatten(&file);
+		}
 	}
 }
 
@@ -402,13 +429,7 @@ LocalDeviceImpl::HandleExpectedRequest(struct hci_event_header* event,
 void
 LocalDeviceImpl::HandleEvent(struct hci_event_header* event)
 {
-/*
-	printf("### Incoming event: len = %d\n", event->elen);
-	for (int16 index = 0; index < event->elen + 2; index++) {
-		printf("%x:", ((uint8*)event)[index]);
-	}
-	printf("### \n");
-*/
+
 	BMessage* request = NULL;
 	int32 eventIndexLocation;
 
@@ -521,8 +542,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", version->status);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -545,8 +565,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 			reply.AddUInt8("status", pageTimeout->status);
 			reply.AddInt32("result", pageTimeout->page_timeout);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -598,8 +617,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", features->status);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -633,8 +651,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", buffer->status);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -660,8 +677,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", supported_commands->status);
 			status = request->SendReply(&reply);
-			// printf("Sending reply... %d\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -683,8 +699,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", readbdaddr->status);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -709,8 +724,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", classDev->status);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -733,8 +747,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", readLocalName->status);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -750,8 +763,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", *statusReply);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			//ClearWantedEvent(request, HCI_EVENT_CMD_COMPLETE, opcodeExpected);
@@ -769,8 +781,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", *statusReply);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request, HCI_EVENT_CMD_COMPLETE, opcodeExpected);
@@ -790,8 +801,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 
 			reply.AddUInt8("status", linkKeyRetrieval->status);
 			status = request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			ClearWantedEvent(request);
 			break;
@@ -826,8 +836,7 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 			reply.AddUInt8("status", scanEnable->status);
 			reply.AddInt8("scan_enable", scanEnable->enable);
 			status = request->SendReply(&reply);
-			printf("Sending reply. scan_enable = %d\n", scanEnable->enable);
-			// debug reply.PrintToStream();
+			TRACE_BT("Sending reply. scan_enable = %d\n", scanEnable->enable);
 
 			// This request is not gonna be used anymore
 			ClearWantedEvent(request);
@@ -853,9 +862,9 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 				BluetoothCommandOpcode(opcodeExpected), *(uint8*)(event + 1));
 
 			status = request->SendReply(&reply);
-			printf("%s: Sending reply write...\n", __func__);
+			TRACE_BT("%s: Sending reply write...\n", __func__);
 			if (status < B_OK)
-				printf("%s: Error sending reply write!\n", __func__);
+				TRACE_BT("%s: Error sending reply write!\n", __func__);
 
 			BMessage* inquiry_request = FindPetition(HCI_EVENT_INQUIRY_COMPLETE);
 			if (inquiry_request != NULL)
@@ -887,9 +896,9 @@ LocalDeviceImpl::CommandComplete(struct hci_ev_cmd_complete* event,
 				BluetoothCommandOpcode(opcodeExpected), *(uint8*)(event + 1));
 
 			status = request->SendReply(&reply);
-			printf("%s: Sending reply write...\n", __func__);
+			TRACE_BT("%s: Sending reply write...\n", __func__);
 			if (status < B_OK)
-				printf("%s: Error sending reply write!\n", __func__);
+				TRACE_BT("%s: Error sending reply write!\n", __func__);
 
 			ClearWantedEvent(request);
 			break;
@@ -937,8 +946,7 @@ LocalDeviceImpl::CommandStatus(struct hci_ev_cmd_status* event,
 
 			reply.AddUInt8("status", event->status);
 			request->SendReply(&reply);
-			//printf("Sending reply... %ld\n", status);
-			// debug reply.PrintToStream();
+
 
 			ClearWantedEvent(request, HCI_EVENT_CMD_STATUS,
 				PACK_OPCODE(OGF_LINK_CONTROL, OCF_INQUIRY));
@@ -954,8 +962,7 @@ LocalDeviceImpl::CommandStatus(struct hci_ev_cmd_status* event,
 				reply.AddInt8("status", event->status);
 				request->SendReply(&reply);
 			}
-			// printf("Sending reply... %ld\n", status);
-			//  debug reply.PrintToStream();
+
 
 			ClearWantedEvent(request, HCI_EVENT_CMD_STATUS, opcodeExpected);
 
@@ -1068,10 +1075,10 @@ LocalDeviceImpl::InquiryResult(uint8* numberOfResponses, BMessage* request)
 		reply.AddUInt16("clock_offset", clock_offset_array[i]);
 	}
 
-	printf("%s: Sending reply...\n", __func__);
+	TRACE_BT("%s: Sending reply...\n", __func__);
 	status_t status = request->SendReply(&reply);
 	if (status < B_OK)
-		printf("%s: Error sending reply!\n", __func__);
+		TRACE_BT("%s: Error sending reply!\n", __func__);
 }
 
 
@@ -1109,10 +1116,10 @@ LocalDeviceImpl::InquiryResultWithRSSI(uint8* numberOfResponses, BMessage* reque
 		reply.AddInt8("rssi", rssi_array[i]);
 	}
 
-	printf("%s: Sending reply...\n", __func__);
+	TRACE_BT("%s: Sending reply...\n", __func__);
 	status_t status = request->SendReply(&reply);
 	if (status < B_OK)
-		printf("%s: Error sending reply!\n", __func__);
+		TRACE_BT("%s: Error sending reply!\n", __func__);
 }
 
 
@@ -1143,10 +1150,10 @@ LocalDeviceImpl::ExtendedInquiryResult(uint8* numberOfResponses, BMessage* reque
 
 	ParseEIR(info->eir, HCI_MAX_EIR_LENGTH, reply);
 
-	printf("%s: Sending reply...\n", __func__);
+	TRACE_BT("%s: Sending reply...\n", __func__);
 	status_t status = request->SendReply(&reply);
 	if (status < B_OK)
-		printf("%s: Error sending reply!\n", __func__);
+		TRACE_BT("%s: Error sending reply!\n", __func__);
 }
 
 
@@ -1243,6 +1250,7 @@ LocalDeviceImpl::LeConnectionComplete(struct hci_ev_le_conn_complete* event,
 		if (event->status == BT_OK) {
 			device->handle = B_LENDIAN_TO_HOST_INT16(event->handle);
 			device->conn_state = RemoteDevice::CONNECTED;
+			notify_connection(device, event->bdaddr);
 		} else
 			device->conn_state = RemoteDevice::DISCONNECTED;
 	}
@@ -1485,10 +1493,10 @@ LocalDeviceImpl::InquiryComplete(uint8* status, BMessage* request)
 
 	reply.AddUInt8("status", *status);
 
-	printf("%s: Sending reply...\n", __func__);
+	TRACE_BT("%s: Sending reply...\n", __func__);
 	status_t stat = request->SendReply(&reply);
 	if (stat < B_OK)
-		printf("%s: Error sending reply!\n", __func__);
+		TRACE_BT("%s: Error sending reply!\n", __func__);
 
 	// The Low Energy scan that DiscoveryAgent started alongside the inquiry is
 	// not stopped by the controller, and the petition about to be dropped is
@@ -1528,7 +1536,7 @@ LocalDeviceImpl::RemoteNameRequestComplete(
 
 	status_t status = request->SendReply(&reply);
 	if (status < B_OK)
-		printf("%s: Error sending reply to BMessage request: %s!\n",
+		TRACE_BT("%s: Error sending reply to BMessage request: %s!\n",
 			__func__, strerror(status));
 
 	// This request is not gonna be used anymore
@@ -1822,10 +1830,7 @@ LocalDeviceImpl::ConnectionComplete(struct hci_ev_conn_complete* event)
 			rd->encryption_enabled = event->encrypt_mode;
 		}
 
-		// TODO: Review, this rDevice is leaked
-		ConnectionIncoming* iConnection = new ConnectionIncoming(
-			new RemoteDevice(event->bdaddr, rd->classOfDevice));
-		iConnection->Show();
+		notify_connection(rd, event->bdaddr);
 
 		TRACE_BT("LocalDeviceImpl: %s: Address %s handle=%#x type=%d encrypt=%d\n", __FUNCTION__,
 				bdaddrUtils::ToString(event->bdaddr).String(), event->handle,
@@ -1938,6 +1943,9 @@ LocalDeviceImpl::LinkKeyNotify(hci_ev_link_key_notify* event,
 
 	rd->link_key = event->link_key;
 	rd->link_type = event->key_type;
+	// A crash or forced server restart must not lose a pairing which already
+	// completed successfully.
+	SaveRemoteDevices();
 }
 
 

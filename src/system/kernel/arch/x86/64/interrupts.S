@@ -417,6 +417,10 @@ FUNCTION(x86_64_syscall_entry):
 	ja		.Lsyscall_stack_args
 
 .Lperform_syscall:
+	testl	$THREAD_FLAGS_SANDBOXED, THREAD_flags(%r12)
+	jnz		.Lpre_syscall_sandbox
+
+.Lpre_syscall_sandbox_done:
 	testl	$THREAD_FLAGS_DEBUGGER_INSTALLED, THREAD_flags(%r12)
 	jnz		.Lpre_syscall_debug
 
@@ -481,6 +485,42 @@ FUNCTION(x86_64_syscall_entry):
 	// Restore previous GS base and return.
 	swapgs
 	sysretq
+
+.Lpre_syscall_sandbox:
+	// The confinement check wants the same flat block of arguments the
+	// debugger path builds, plus somewhere to put the value the syscall
+	// should return if it is refused.
+	push	IFRAME_r9(%rbp)
+	push	IFRAME_r8(%rbp)
+	push	IFRAME_r10(%rbp)
+	push	IFRAME_dx(%rbp)
+	push	IFRAME_si(%rbp)
+	push	IFRAME_di(%rbp)
+	movq	%r14, %rdi				// syscall number
+	movq	%rsp, %rsi				// the argument block
+	subq	$16, %rsp				// the return value slot, and padding to
+									// keep the total a multiple of 16
+	movq	%rsp, %rdx
+	push	%rax					// the syscall table entry, which the call
+	subq	$8, %rsp				// would otherwise clobber
+	call	sandbox_pre_syscall
+	addq	$8, %rsp
+	pop		%rax
+	testb	%al, %al
+	jz		1f
+
+	// Permitted: drop the block and carry on into the call.
+	addq	$64, %rsp
+	jmp		.Lpre_syscall_sandbox_done
+
+1:
+	// Refused. The check has already killed the team or raised the signal
+	// where that was the action; all that is left is to return its value
+	// without performing the call.
+	movq	(%rsp), %rcx
+	movq	%rcx, IFRAME_ax(%rbp)
+	addq	$64, %rsp
+	jmp		.Lsyscall_return
 
 .Lpre_syscall_debug:
 	// user_debug_pre_syscall expects a pointer to a block of arguments, need

@@ -122,7 +122,7 @@ void BluetoothServer::ReadyToRun(void)
 
 void BluetoothServer::AppActivated(bool act)
 {
-	printf("Activated %d\n",act);
+	TRACE_BT("Activated %d\n",act);
 }
 
 
@@ -191,7 +191,7 @@ void BluetoothServer::MessageReceived(BMessage* message)
 			const char* signature;
 
 			if (message->FindString("be:signature", &signature) == B_OK) {
-				printf("input_server : %s\n", signature);
+				TRACE_BT("input_server : %s\n", signature);
 				if (strcmp(signature, "application/x-vnd.Be-TSKB") == 0) {
 
 				}
@@ -315,8 +315,6 @@ void BluetoothServer::MessageReceived(BMessage* message)
 	if (status != B_WOULD_BLOCK) {
 		reply.AddInt32("status", status);
 		message->SendReply(&reply);
-//		printf("Sending reply message for->\n");
-//		message->PrintToStream();
 	}
 }
 
@@ -453,7 +451,7 @@ BluetoothServer::HandleAcquireLocalDevice(BMessage* message, BMessage* reply)
 			index < fLocalDevicesList.CountItems();	index++) {
 			lDeviceImpl= fLocalDevicesList.ItemAt(index);
 			if (lDeviceImpl != NULL && lDeviceImpl->Available()) {
-				printf("Requested local device %" B_PRId32 "\n",
+				TRACE_BT("Requested local device %" B_PRId32 "\n",
 					lDeviceImpl->GetID());
 				TRACE_BT("BluetoothServer: Device available: %" B_PRId32 "\n", lDeviceImpl->GetID());
 				lastIndex = index;
@@ -466,7 +464,7 @@ BluetoothServer::HandleAcquireLocalDevice(BMessage* message, BMessage* reply)
 			for (int index = 0; index <= lastIndex ; index ++) {
 				lDeviceImpl = fLocalDevicesList.ItemAt(index);
 				if (lDeviceImpl != NULL && lDeviceImpl->Available()) {
-					printf("Requested local device %" B_PRId32 "\n",
+					TRACE_BT("Requested local device %" B_PRId32 "\n",
 						lDeviceImpl->GetID());
 					TRACE_BT("BluetoothServer: Device available: %" B_PRId32 "\n", lDeviceImpl->GetID());
 					lastIndex = index;

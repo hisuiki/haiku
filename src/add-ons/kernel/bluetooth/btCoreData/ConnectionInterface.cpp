@@ -27,9 +27,17 @@ HciConnection::HciConnection(hci_id hid)
 {
 	mutex_init(&fLock, "HciConnection");
 	Hid = hid;
+	ndevice = NULL;
+	destination = BDADDR_NULL;
 	fNextIdent = L2CAP_NULL_IDENT;
 	destination_type = 0;
 	low_energy = false;
+	handle = 0;
+	type = 0;
+	mtu = L2CAP_MTU_MINIMUM;
+	status = HCI_CONN_CLOSED;
+	currentRxPacket = NULL;
+	currentRxExpectedLength = 0;
 	disconnect_hook = NULL;
 
 	// TODO: This doesn't really belong here...
@@ -53,18 +61,13 @@ AddConnection(uint16 handle, int type, const bdaddr_t& dst, hci_id hid)
 	// Create connection descriptor
 
 	HciConnection* conn = ConnectionByHandle(handle, hid);
-	if (conn != NULL)
-		goto update;
+	bool newConnection = conn == NULL;
+	if (newConnection) {
+		conn = new (std::nothrow) HciConnection(hid);
+		if (conn == NULL)
+			return NULL;
+	}
 
-	conn = new (std::nothrow) HciConnection(hid);
-	if (conn == NULL)
-		goto bail;
-
-	// memset(conn, 0, sizeof(HciConnection));
-
-	conn->currentRxPacket = NULL;
-	conn->currentRxExpectedLength = 0;
-update:
 	// fill values
 	bdaddrUtils::Copy(conn->destination, dst);
 	{
@@ -78,12 +81,11 @@ update:
 	conn->status = HCI_CONN_OPEN;
 	conn->mtu = L2CAP_MTU_MINIMUM; // TODO: give the mtu to the connection
 
-	{
-	MutexLocker _(&sConnectionListLock);
-	sConnectionList.Add(conn);
+	if (newConnection) {
+		MutexLocker _(&sConnectionListLock);
+		sConnectionList.Add(conn);
 	}
 
-bail:
 	return conn;
 }
 

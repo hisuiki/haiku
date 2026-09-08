@@ -171,14 +171,12 @@ BluetoothWindow::MessageReceived(BMessage* message)
 
 		case kMsgStartServices:
 			if (!be_roster->IsRunning(BLUETOOTH_SIGNATURE)) {
-				status_t error = be_roster->Launch(BLUETOOTH_SIGNATURE);
-				printf("kMsgStartServices: %s\n", strerror(error));
+				be_roster->Launch(BLUETOOTH_SIGNATURE);
 			}
 			break;
 		case kMsgStopServices:
 			if (be_roster->IsRunning(BLUETOOTH_SIGNATURE)) {
-				status_t error = BMessenger(BLUETOOTH_SIGNATURE).SendMessage(B_QUIT_REQUESTED);
-				printf("kMsgStopServices: %s\n", strerror(error));
+				BMessenger(BLUETOOTH_SIGNATURE).SendMessage(B_QUIT_REQUESTED);
 			}
 			break;
 

@@ -110,7 +110,7 @@ private:
 
 InquiryPanel::InquiryPanel(BRect frame, LocalDevice* lDevice)
 	:
-	BWindow(frame, B_TRANSLATE_SYSTEM_NAME("Bluetooth"), B_FLOATING_WINDOW,
+	BWindow(frame, B_TRANSLATE("Scan for Bluetooth devices"), B_FLOATING_WINDOW,
 	B_NOT_ZOOMABLE | B_AUTO_UPDATE_SIZE_LIMITS,	B_ALL_WORKSPACES ),
 	fMessenger(this),
  	fScanning(false),
@@ -153,7 +153,6 @@ InquiryPanel::InquiryPanel(BRect frame, LocalDevice* lDevice)
 		fDiscoveryAgent = fLocalDevice->GetDiscoveryAgent();
 		fDiscoveryListener = new PanelDiscoveryListener(this);
 
-		SetTitle((const char*)(fLocalDevice->GetFriendlyName().String()));
 	} else {
 		fMessage->SetText(B_TRANSLATE("This computer doesn't seem to have Bluetooth support."));
 		fScanButton->SetEnabled(false);

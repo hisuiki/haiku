@@ -23,4 +23,5 @@ DoCatalogs bluetooth_server :
 	x-vnd.Haiku-bluetooth_server
 	:
 	DeskbarReplicant.cpp
+	LocalDeviceImpl.cpp
 ;

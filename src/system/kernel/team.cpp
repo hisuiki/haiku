@@ -44,6 +44,7 @@
 #include <posix/realtime_sem.h>
 #include <posix/xsi_semaphore.h>
 #include <safemode.h>
+#include <sandbox.h>
 #include <sem.h>
 #include <syscall_process_info.h>
 #include <syscall_load_image.h>
@@ -476,6 +477,8 @@ Team::Team(team_id id, bool kernel)
 
 	clear_team_debug_info(&debug_info, true);
 
+	sandbox = NULL;
+
 	dead_threads_kernel_time = 0;
 	dead_threads_user_time = 0;
 	cpu_clock_offset = 0;
@@ -514,6 +517,8 @@ Team::~Team()
 {
 	// get rid of all associated data
 	PrepareForDeletion();
+
+	sandbox_team_uninit(this);
 
 	if (io_context != NULL)
 		vfs_put_io_context(io_context);
@@ -2237,6 +2242,12 @@ fork_team(void)
 
 	// copy image list
 	if (copy_images(parentTeam->id, team) != B_OK)
+		goto err5;
+
+	// Carry the parent's confinement over. A child that started out
+	// unconfined would be the simplest way out of a sandbox there is.
+	status = sandbox_inherit(team, parentTeam);
+	if (status != B_OK)
 		goto err5;
 
 	// insert the team into its parent and the teams hash

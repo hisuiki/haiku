@@ -39,7 +39,7 @@ static const char* btDevices_name = BT_HCI_MODULE_NAME;
 
 
 usb_module_info* usb = NULL;
-bt_hci_module_info* hci = NULL; // TODO remove / clean
+bt_hci_module_info* hci = NULL;
 struct bt_hci_module_info* btDevices = NULL;
 struct net_buffer_module_info* nb = NULL;
 struct bluetooth_core_data_module_info* btCoreData = NULL;
@@ -594,10 +594,10 @@ device_open(const char* name, uint32 flags, void **cookie)
 			bdev->ndev = ndev;  // Get the net_device
 
 		} else {
-			hdev = bdev->num; // XXX: Lets try to go on
+			hdev = bdev->num;
 		}
 	} else {
-		hdev = bdev->num; // XXX: Lets try to go on
+		hdev = bdev->num;
 	}
 
 	bdev->hdev = hdev;
@@ -960,9 +960,6 @@ uninit_driver(void)
 			free(publish_names[j]);
 
 		if (bt_usb_devices[j] != NULL) {
-			//	if (connected_dev != NULL) {
-			//		debugf("Device %p still exists.\n",	connected_dev);
-			//	}
 			ERROR("%s: %s still present?\n", __func__, bt_usb_devices[j]->name);
 			kill_device(bt_usb_devices[j]);
 		}
@@ -1011,17 +1008,6 @@ publish_devices(void)
 
 	publish_names[i] = NULL;
 	TRACE("%s: published %" B_PRId32 " devices\n", __func__, i);
-
-	// TODO: this method might make better memory use
-	// dev_names = (char**)malloc(sizeof(char*) * (dev_count + 1));
-	// if (dev_names) {
-	// for (i = 0; i < MAX_NUM_DEVS; i++) {
-	//	if ((dev != NULL) // dev + \n
-	//	&& (dev_names[i] = (char*)malloc(strlen(DEVICE_PATH) + 2))) {
-	//	sprintf(dev_names[i], "%s%ld", DEVICE_PATH, dev->num);
-	//	debugf("publishing \"%s\"\n", dev_names[i]);
-	//	}
-	// }
 
 	return (const char**)publish_names;
 }

@@ -1097,6 +1097,24 @@ PCI::_ConfigureBridges(PCIBus *bus)
 				" control from 0x%04x to 0x%04x\n", dev->domain, dev->bus,
 				dev->device, dev->function, bridgeControlOld,
 				bridgeControlNew);
+
+			// A bridge only forwards the memory transactions of the devices
+			// behind it upstream while it is a bus master itself, so without
+			// this any device below it can set up DMA all it wants and never
+			// reach host memory. Some firmwares leave this to the OS, which
+			// leaves such devices unable to do anything at all: their reads
+			// never complete, and even their MSI writes are dropped.
+			uint16 commandOld = ReadConfig(dev->domain, dev->bus, dev->device,
+				dev->function, PCI_command, 2);
+			if ((commandOld & PCI_command_master) == 0) {
+				WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
+					PCI_command, 2, commandOld | PCI_command_master);
+				dprintf("PCI: dom %u, bus %u, dev %2u, func %u, enabled bus "
+					"mastering on the bridge (command 0x%04x -> 0x%04x)\n",
+					dev->domain, dev->bus, dev->device, dev->function,
+					commandOld, ReadConfig(dev->domain, dev->bus, dev->device,
+					dev->function, PCI_command, 2));
+			}
 		}
 
 		if (dev->child)

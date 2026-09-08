@@ -244,6 +244,24 @@ le_connection_closed(HciConnection* connection)
 }
 
 
+/*! Starts the fixed-channel protocols belonging to every Low Energy link.
+
+	Some peripherals send an LE signalling request immediately after connecting,
+	but others wait for the central to initiate ATT and security. Starting from
+	the connection-complete event supports both without relying on packet timing.
+*/
+static void
+le_connection_established(HciConnection* connection)
+{
+	if (connection == NULL || !connection->low_energy)
+		return;
+
+	connection->disconnect_hook = &le_connection_closed;
+	smp_link_established(connection);
+	att_start_discovery(connection);
+}
+
+
 status_t
 l2cap_receive_data(net_buffer* buffer)
 {
@@ -278,7 +296,8 @@ l2cap_receive_data(net_buffer* buffer)
 			// We need to find the connection this packet is associated with.
 			struct HciConnection* connection = connection_for(buffer);
 			if (connection == NULL) {
-				panic("no connection for received L2CAP command");
+				ERROR("bt: %s: no connection for received L2CAP command\n", __func__);
+				gBufferModule->free(buffer);
 				return ENOTCONN;
 			}
 
@@ -297,14 +316,9 @@ l2cap_receive_data(net_buffer* buffer)
 
 			status = handle_le_signaling_command(connection, buffer);
 
-			// So that a button or key held when the link drops is released.
-			connection->disconnect_hook = &le_connection_closed;
-
-			// Resume the bond if this peripheral has one, otherwise offer to
-			// pair. Both calls refuse to start twice, so reaching them again
-			// is safe.
-			smp_link_established(connection);
-			att_start_discovery(connection);
+			// This normally ran at connection-complete time. Keep the call as
+			// an idempotent fallback in case L2CAP loaded after that event.
+			le_connection_established(connection);
 			break;
 		}
 
@@ -427,10 +441,16 @@ l2cap_std_ops(int32 op, ...)
 			if (error != B_OK)
 				return error;
 
+			btCoreData->le_connection_established
+				= &le_connection_established;
 			return B_OK;
 		}
 
 		case B_MODULE_UNINIT:
+			if (btCoreData->le_connection_established
+					== &le_connection_established) {
+				btCoreData->le_connection_established = NULL;
+			}
 			gL2capEndpointManager.~L2capEndpointManager();
 			return B_OK;
 

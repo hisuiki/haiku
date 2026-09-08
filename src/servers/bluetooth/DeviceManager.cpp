@@ -49,13 +49,13 @@ DeviceManager::MessageReceived(BMessage* msg)
 
 					// Check if	the	entry is a File	or a directory
 					if (dir.SetTo(&ref) == B_OK) {
-						printf("%s: Entry %s is taken as a dir\n", __FUNCTION__, name);
+						TRACE_BT("%s: Entry %s is taken as a dir\n", __FUNCTION__, name);
 					    node_ref nref;
 					    dir.GetNodeRef(&nref);
 						AddDirectory(&nref);
 
 					} else {
-						printf("%s: Entry %s is taken as a file\n", __FUNCTION__, name);
+						TRACE_BT("%s: Entry %s is taken as a file\n", __FUNCTION__, name);
                         AddDevice(&ref);
 					}
 				}
@@ -95,10 +95,6 @@ DeviceManager::AddDirectory(node_ref *nref)
 		return status;
 	}
 
-//	BPath path(*nref);
-//	BString	str(path.Path());
-//
-//	TRACE_BT("DeviceManager: Exploring entries in %s\n", str.String());
 
 	entry_ref ref;
 	status_t error;
@@ -200,7 +196,7 @@ DeviceManager::StartMonitoringDevice(const char	*device)
 
 	/* Build the path */
 	if ((err = path.Append(device))	!= B_OK) {
-		printf("DeviceManager::StartMonitoringDevice BPath::Append() error %s: %s\n", path.Path(), strerror(err));
+		TRACE_BT("DeviceManager::StartMonitoringDevice BPath::Append() error %s: %s\n", path.Path(), strerror(err));
 		return err;
 	}
 
@@ -208,20 +204,20 @@ DeviceManager::StartMonitoringDevice(const char	*device)
 	if ((err = directory.SetTo(path.Path())) !=	B_OK) {
 		/* Entry not there ... */
 		if (err	!= B_ENTRY_NOT_FOUND) {	// something else we cannot	handle
-			printf("DeviceManager::StartMonitoringDevice SetTo error %s: %s\n",	path.Path(), strerror(err));
+			TRACE_BT("DeviceManager::StartMonitoringDevice SetTo error %s: %s\n",	path.Path(), strerror(err));
 			return err;
 		}
 		/* Create it */
 		if ((err = create_directory(path.Path(), S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH)) != B_OK
 			|| (err	= directory.SetTo(path.Path()))	!= B_OK) {
-			printf("DeviceManager::StartMonitoringDevice CreateDirectory error %s: %s\n", path.Path(), strerror(err));
+			TRACE_BT("DeviceManager::StartMonitoringDevice CreateDirectory error %s: %s\n", path.Path(), strerror(err));
 			return err;
 		}
 	}
 
 	// get noderef
 	if ((err = directory.GetNodeRef(&nref))	!= B_OK) {
-		printf("DeviceManager::StartMonitoringDevice GetNodeRef	error %s: %s\n", path.Path(), strerror(err));
+		TRACE_BT("DeviceManager::StartMonitoringDevice GetNodeRef	error %s: %s\n", path.Path(), strerror(err));
 		return err;
 	}
 
@@ -246,25 +242,6 @@ DeviceManager::StartMonitoringDevice(const char	*device)
 
     TRACE_BT("DeviceManager: Finished exploring entries(%s)\n", strerror(error));
 
-#if	0
-	HCIDelegate	*tmphd = NULL;
-	int32 i	= 0;
-
-	// TODO!! ask the server if	this needs to be monitored
-
-	while ((tmphd =	(HCIDelegate *)fDelegatesList.ItemAt(i++)) !=NULL) {
-
-		/* Find	out	the	reference*/
-		node_ref *dnref	= (node_ref	*)tmphd->fMonitoredRefs	;
-		if (*dnref == nref)	{
-			printf("StartMonitoringDevice already monitored\n");
-			alreadyMonitored = true;
-			break;
-		}
-
-	}
-#endif
-
 	return B_OK;
 }
 
@@ -281,43 +258,5 @@ DeviceManager::StopMonitoringDevice(const char *device)
 		|| ((err = directory.GetNodeRef(&nref))	!= B_OK))
 		return err;
 
-	// test	if still monitored
-/*
-	bool stillMonitored	= false;
-	int32 i	= 0;
-	while ((tmpaddon = (_BDeviceAddOn_ *)fDeviceAddons.ItemAt(i++))	!=NULL)	{
-		if (addon == tmpaddon)
-			continue;
-
-		int32 j=0;
-		node_ref *dnref	= NULL;
-		while ((dnref =	(node_ref *)tmpaddon->fMonitoredRefs.ItemAt(j++)) != NULL) {
-			if (*dnref == nref)	{
-				stillMonitored = true;
-				break;
-			}
-		}
-		if (stillMonitored)
-			break;
-	}
-
-	// remove from list
-	node_ref *dnref	= NULL;
-	int32 j=0;
-	while ((dnref =	(node_ref *)addon->fMonitoredRefs.ItemAt(j)) !=	NULL) {
-		if (*dnref == nref)	{
-			addon->fMonitoredRefs.RemoveItem(j);
-			delete dnref;
-			break;
-		}
-		j++;
-	}
-
-	// stop	monitoring if needed
-	if (!stillMonitored) {
-		if ((err = RemoveDirectory(&nref, addon)) != B_OK)
-			return err;
-	}
-*/
 	return B_OK;
 }

@@ -40,9 +40,7 @@ BluetoothApplication::ReadyToRun()
 		switch (choice) {
 			case 0:
 			{
-				status_t error;
-				error = be_roster->Launch(BLUETOOTH_SIGNATURE);
-				printf("kMsgStartServices: %s\n", strerror(error));
+				be_roster->Launch(BLUETOOTH_SIGNATURE);
 				// TODO: This is temporal
 				// BMessage handcheck: use the version of Launch()
 				// that includes a BMessage	in that message include

@@ -49,6 +49,7 @@
 #include <posix/xsi_message_queue.h>
 #include <posix/xsi_semaphore.h>
 #include <real_time_clock.h>
+#include <sandbox.h>
 #include <sem.h>
 #include <smp.h>
 #include <stack_protector.h>
@@ -199,6 +200,9 @@ _start(kernel_args *bootKernelArgs, int currentCPU)
 		TRACE("init generic syscall\n");
 		generic_syscall_init();
 		smp_init_post_generic_syscalls();
+		TRACE("init sandbox\n");
+		sandbox_init();
+			// needs the heap and the syscall table, nothing else
 		TRACE("init scheduler\n");
 		scheduler_init();
 		TRACE("init threads\n");

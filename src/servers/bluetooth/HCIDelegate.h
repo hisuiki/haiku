@@ -21,7 +21,6 @@ class HCIDelegate {
 	public:
 		HCIDelegate(BPath* path)
 		{
-			//TODO create such queue
 			fIdentifier = -1;
 		}
 
@@ -38,20 +37,16 @@ class HCIDelegate {
 		}
 
 		virtual status_t IssueCommand(raw_command rc, size_t size)=0; 
-			// TODO means to be private use QueueCommand
 		virtual status_t Launch()=0;
 
 
 		void FreeWindow(uint8 slots)
 		{
-			// TODO: hci control flow
 		} 
 
 
 		status_t QueueCommand(raw_command rc, size_t size) 
 		{
-			// TODO: this is suposed to queue the command in a queue so all
-			// are actually send to HW to implement HCI FlowControl requeriments
 			return IssueCommand(rc, size);
 		}
 

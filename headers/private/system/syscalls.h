@@ -8,6 +8,7 @@
 
 #include <arch_config.h>
 #include <DiskDeviceDefs.h>
+#include <syscall_filter_defs.h>
 #include <elf_private.h>
 #include <image.h>
 #include <image_defs.h>
@@ -654,6 +655,13 @@ extern status_t		_kern_delete_child_partition(partition_id partitionID,
 extern status_t		_kern_start_watching_disks(uint32 eventMask, port_id port,
 						int32 token);
 extern status_t		_kern_stop_watching_disks(port_id port, int32 token);
+
+// process confinement
+extern status_t		_kern_pledge(const char* promises, uint32 flags);
+extern status_t		_kern_unveil(const char* path, const char* permissions);
+extern status_t		_kern_set_syscall_filter(
+						const syscall_filter_program* program, uint32 flags);
+extern status_t		_kern_syscall_index(const char* name, int32* _index);
 
 
 // The end mark for gensyscallinfos.

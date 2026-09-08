@@ -720,6 +720,12 @@ insert_thread_into_team(Team *team, Thread *thread)
 		team->main_thread = thread;
 	}
 	thread->team = team;
+
+	// A thread spawned into a confined team has to be checked like the rest of
+	// them, or a sandboxed process could hand its work to a fresh thread and
+	// have it done unchecked.
+	if (team->sandbox != NULL)
+		atomic_or(&thread->flags, THREAD_FLAGS_SANDBOXED);
 }
 
 

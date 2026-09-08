@@ -30,7 +30,7 @@ struct snet_buffer {
 snet_buffer*
 snb_create(uint16 size)
 {
-	// TODO: pointer checking
+
 
 #ifdef SNB_BUFFER_ATTACHED
 	// Allocating these 2 buffers together might prevent memory fragmentation
@@ -51,7 +51,7 @@ snb_create(uint16 size)
 void
 snb_put(snet_buffer* snb, void* data, uint16 size)
 {
-	// TODO: check overflow
+
 	memcpy( &snb->buffer[snb->puttingSize], data, size);
 	snb->puttingSize+=size;
 }
@@ -60,7 +60,7 @@ snb_put(snet_buffer* snb, void* data, uint16 size)
 void*
 snb_pull(snet_buffer* snb, uint16 size)
 {
-	// TODO: check overflow
+
 	snb->pullingSize+=size;
 	return &snb->buffer[snb->pullingSize - size];
 	
@@ -93,7 +93,7 @@ snb_free(snet_buffer* snb)
 void*
 snb_get(snet_buffer* snb)
 {
-	// TODO: pointer checking
+
 	return snb->buffer;
 }
 
@@ -101,7 +101,7 @@ snb_get(snet_buffer* snb)
 uint16
 snb_size(snet_buffer* snb)
 {
-	// TODO: pointer checking
+
 	return snb->expectedSize;
 }
 
@@ -109,7 +109,7 @@ snb_size(snet_buffer* snb)
 void*
 snb_cookie(snet_buffer* snb)
 {
-	// TODO: pointer checking
+
 	return snb->cookie;
 }
 
@@ -117,7 +117,7 @@ snb_cookie(snet_buffer* snb)
 void
 snb_set_cookie(snet_buffer* snb, void* cookie)
 {
-	// TODO: pointer checking
+
 	snb->cookie = cookie;
 }
 

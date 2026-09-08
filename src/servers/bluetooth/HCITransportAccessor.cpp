@@ -7,6 +7,7 @@
 #include <String.h>
 
 #include "BluetoothServer.h"
+#include "Debug.h"
 #include "HCITransportAccessor.h"
 
 
@@ -18,10 +19,10 @@ HCITransportAccessor::HCITransportAccessor(BPath* path) : HCIDelegate(path)
 	if (fDescriptor > 0) {
 		// find out which ID was assigned
 		status = ioctl(fDescriptor, GET_HCI_ID, &fIdentifier, 0);
-		printf("%s: hid retrieved %" B_PRIx32 " status=%" B_PRId32 "\n",
+		TRACE_BT("%s: hid retrieved %" B_PRIx32 " status=%" B_PRId32 "\n",
 			__FUNCTION__, fIdentifier, status);
 	} else {
-		printf("%s: Device driver %s could not be opened %" B_PRId32 "\n",
+		fprintf(stderr, "%s: Device driver %s could not be opened %" B_PRId32 "\n",
 			__FUNCTION__, path->Path(), fIdentifier);
 		fIdentifier = B_ERROR;
 	}
@@ -44,13 +45,6 @@ HCITransportAccessor::IssueCommand(raw_command rc, size_t size)
 {
 	if (Id() < 0 || fDescriptor < 0)
 		return B_ERROR;
-/*
-printf("### Command going: len = %ld\n", size);
-for (uint16 index = 0 ; index < size; index++ ) {
-	printf("%x:",((uint8*)rc)[index]);
-}
-printf("### \n");
-*/
 
 	return ioctl(fDescriptor, ISSUE_BT_COMMAND, rc, size);
 }

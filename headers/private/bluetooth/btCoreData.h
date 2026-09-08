@@ -94,6 +94,11 @@ struct bluetooth_core_data_module_info {
 	uint8					(*allocate_command_ident)(struct HciConnection* conn, void* associated);
 	void*					(*lookup_command_ident)(struct HciConnection* conn, uint8 ident);
 	void					(*free_command_ident)(struct HciConnection* conn, uint8 ident);
+
+	// Installed by L2CAP while its module is loaded. LE fixed channels exist
+	// as soon as the controller reports the connection, so their setup must
+	// not depend on the peer sending the first L2CAP packet.
+	void					(*le_connection_established)(struct HciConnection* conn);
 };
 
 

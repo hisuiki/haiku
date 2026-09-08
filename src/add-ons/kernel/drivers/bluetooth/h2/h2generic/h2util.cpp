@@ -78,44 +78,6 @@ nb_destroy(net_buffer* nbuf)
 // Extract the expected size of the packet
 // TODO: This might be inefficient as at the moment of the creation
 // of the net_buffer this information is known and it could be stored 
-#if 0
-ssize_t
-get_expected_size(net_buffer* nbuf)
-{
-
-	if (nbuf == NULL)
-		panic("Analizing NULL packet");
-
-	switch (nbuf->protocol) {
-
-		case BT_COMMAND: {
-			struct hci_command_header* header = nb_get_whole_buffer(nbuf);
-			return header->clen + sizeof(struct hci_command_header);
-		}
-
-		case BT_EVENT: {
-			struct hci_event_header* header = nb_get_whole_buffer(nbuf);
-			return header->elen + sizeof(struct hci_event_header);
-		}
-
-		case BT_ACL: {
-			struct hci_acl_header* header = nb_get_whole_buffer(nbuf);
-			return header->alen + sizeof(struct hci_acl_header);
-		}
-
-		case BT_SCO: {
-			struct hci_sco_header* header = nb_get_whole_buffer(nbuf);
-			return header->slen + sizeof(struct hci_sco_header);
-		}
-
-		default:
-			panic(BLUETOOTH_DEVICE_DEVFS_NAME ":no protocol specified for ");
-		break;
-	}
-
-	return -1;
-}
-#endif
 
 
 #if 0

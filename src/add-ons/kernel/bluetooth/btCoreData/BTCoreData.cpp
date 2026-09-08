@@ -23,6 +23,8 @@ mutex sConnectionListLock = MUTEX_INITIALIZER("bt connection list");
 DoublyLinkedList<HciConnection> sConnectionList;
 net_buffer_module_info* gBufferModule = NULL;
 
+extern bluetooth_core_data_module_info sBCDModule;
+
 
 inline bool
 ExistConnectionByDestination(const bdaddr_t& destination, hci_id hid = -1)
@@ -58,8 +60,10 @@ PostEvent(bluetooth_device* ndev, void* event, size_t size)
 			HciConnection* conn = AddConnection(data->handle, BT_ACL,
 				data->bdaddr, ndev->index);
 
-			if (conn == NULL)
-				panic("no mem for conn desc");
+			if (conn == NULL) {
+				ERROR("bt: %s: no memory for connection descriptor\n", __func__);
+				return B_NO_MEMORY;
+			}
 			conn->ndevice = ndev;
 			TRACE("%s: Registered connection handle=%#x\n", __func__,
 				data->handle);
@@ -90,13 +94,18 @@ PostEvent(bluetooth_device* ndev, void* event, size_t size)
 			HciConnection* conn = AddConnection(get_acl_handle(data->handle),
 				BT_ACL, data->bdaddr, ndev->index);
 
-			if (conn == NULL)
-				panic("no mem for conn desc");
+			if (conn == NULL) {
+				ERROR("bt: %s: no memory for connection descriptor\n", __func__);
+				return B_NO_MEMORY;
+			}
 			conn->ndevice = ndev;
 			conn->destination_type = data->bdaddr_type;
 			conn->low_energy = true;
 			TRACE("%s: Registered LE connection handle=%#x type=%d\n",
 				__func__, get_acl_handle(data->handle), data->bdaddr_type);
+
+			if (sBCDModule.le_connection_established != NULL)
+				sBCDModule.le_connection_established(conn);
 			break;
 		}
 
@@ -220,6 +229,8 @@ bluetooth_core_data_module_info sBCDModule = {
 	allocate_command_ident,
 	lookup_command_ident,
 	free_command_ident,
+
+	NULL,	// le_connection_established, installed by L2CAP
 };
 
 

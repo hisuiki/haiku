@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <errno.h>
+#include <poll.h>
 #include <sys/socket.h>
 
 #include <String.h>
@@ -48,23 +49,51 @@ SDPClient::Start()
 	setsockopt(fClientSocket, SOL_SOCKET, SO_SNDTIMEO, &connectTimeout,
 		sizeof(connectTimeout));
 
-	status = connect(fClientSocket, (sockaddr*)&fSockAddrL2cap, sizeof(sockaddr_l2cap));
-	if (status < 0) {
+	status = connect(fClientSocket, (sockaddr*)&fSockAddrL2cap,
+		sizeof(sockaddr_l2cap));
+	if (status < 0 && errno != EINPROGRESS && errno != EWOULDBLOCK) {
 		status = errno;
-		TRACE_BT("SDP: Could not connect client socket (%s)...\n", strerror(status));
+		TRACE_BT("SDP: Could not connect client socket (%s)...\n",
+			strerror(status));
 		Stop();
 		return status;
+	}
+
+	// L2CAP connect is asynchronous. In particular, a reconnect commonly
+	// reports EWOULDBLOCK even on a socket without O_NONBLOCK; wait for the
+	// endpoint instead of treating that normal intermediate state as failure.
+	if (status < 0) {
+		pollfd descriptor = {fClientSocket, POLLOUT, 0};
+		do {
+			status = poll(&descriptor, 1, 5000);
+		} while (status < 0 && errno == EINTR);
+
+		if (status == 0) {
+			Stop();
+			return B_TIMED_OUT;
+		}
+		if (status < 0) {
+			status = errno;
+			Stop();
+			return status;
+		}
 	}
 
 	int sockError = 0;
 	socklen_t errorLength = sizeof(sockError);
 	status = getsockopt(fClientSocket, SOL_SOCKET, SO_ERROR, &sockError, &errorLength);
-	if (status < 0)
-		TRACE_BT("SDP: Error occured\n");
-	else if (sockError == 0)
+	if (status < 0) {
+		status = errno;
+		Stop();
+		return status;
+	} else if (sockError == 0)
 		TRACE_BT("SDP: Socket connected.\n");
-	else
-		TRACE_BT("SDP: Socket Not connected.\n");
+	else {
+		TRACE_BT("SDP: Socket not connected (%s).\n",
+			strerror(sockError));
+		Stop();
+		return sockError;
+	}
 
 	// set receive timeout
 	timeval timeout;
@@ -128,6 +157,7 @@ SDPClient::RequestServiceRecords()
 		request.WriteExactly(&contStateNumBytes, 1);
 		request.WriteExactly(contStateData, contStateNumBytes);
 
+#ifdef TRACE_BLUETOOTH_SERVER
 		request.Seek(0, SEEK_SET);
 		printf("SDP: Request=\n");
 		for (size_t i = 0; i < request.BufferLength(); i++) {
@@ -136,6 +166,8 @@ SDPClient::RequestServiceRecords()
 			printf("%02X ", byte);
 		}
 		printf("\n");
+		request.Seek(0, SEEK_SET);
+#endif
 
 		BMallocIO reply;
 		if (_IssueRequest(request.Buffer(), request.BufferLength(), &reply) != B_OK) {

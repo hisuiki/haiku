@@ -319,8 +319,6 @@ acl_tx_complete(void* cookie, status_t status, void* data, size_t actual_len)
 	acl_tx_transfer_t* transfer = (acl_tx_transfer_t*)cookie;
 	bt_usb_dev* bdev = transfer->bdev;
 
-	//debugf("fetched=%p type %lx %p\n", bdev, transfer->nbuf->type, data);
-
 	if (status == B_OK) {
 		bdev->stat.successfulTX++;
 		bdev->stat.bytesTX += actual_len;
@@ -428,12 +426,6 @@ submit_tx_acl(bt_usb_dev* bdev, net_buffer* nbuf)
 	transfer->bdev = bdev;
 	transfer->nbuf = nbuf;
 	transfer->data = data;
-	/*
-	debugf("### Outgoing ACL: len = %ld\n", nbuf->size);
-	for (uint32 index = 0 ; index < nbuf->size; index++ ) {
-		dprintf("%x:", ((uint8*)data)[index]);
-	}
-	*/
 
 	error = usb->queue_bulk(bdev->bulk_out_ep->handle, data, nbuf->size,
 		acl_tx_complete, transfer);

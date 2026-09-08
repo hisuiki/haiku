@@ -283,8 +283,10 @@ UnregisterDriver(hci_id id)
 status_t
 PostCommand(hci_id hciId, net_buffer* buffer)
 {
-	if (buffer == NULL)
-		panic("passing null buffer");
+	if (buffer == NULL) {
+		ERROR("bt: %s: passing null buffer\n", __func__);
+		return EINVAL;
+	}
 
 	bluetooth_device* device = FindDeviceByID(hciId);
 	if (device == NULL) {
@@ -306,8 +308,10 @@ PostACL(hci_id hciId, net_buffer* buffer)
 	net_buffer* next_frame = buffer;
 	uint8 flag = HCI_ACL_PACKET_START;
 
-	if (buffer == NULL)
-		panic("passing null buffer");
+	if (buffer == NULL) {
+		ERROR("bt: %s: passing null buffer\n", __func__);
+		return EINVAL;
+	}
 
 	uint16 handle = buffer->type; // TODO: CodeHandler
 
@@ -418,7 +422,7 @@ bluetooth_std_ops(int32 op, ...)
 				(module_info**)&gBufferModule);
 
 			if (status < B_OK) {
-				panic("no way Dude we need that!");
+				ERROR("bt: could not open net_buffer module: %s\n", strerror(status));
 				return status;
 			}
 

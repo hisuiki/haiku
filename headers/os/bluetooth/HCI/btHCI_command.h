@@ -484,6 +484,17 @@ struct hci_command_header {
 
 	#define OCF_LE_CREATE_CONN_CANCEL	0x000E
 
+	#define OCF_LE_CONN_UPDATE			0x0013
+	struct hci_cp_le_conn_update {
+		uint16		handle;
+		uint16		min_interval;
+		uint16		max_interval;
+		uint16		latency;
+		uint16		supervision_timeout;
+		uint16		min_ce_length;
+		uint16		max_ce_length;
+	} __attribute__ ((packed));
+
 	#define OCF_LE_START_ENCRYPTION		0x0019
 	struct hci_cp_le_start_encryption {
 		uint16		handle;
