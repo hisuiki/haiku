@@ -31,7 +31,11 @@ if $(TARGET_PACKAGING_ARCH) = x86_64
 		[ FDirName $(HAIKU_TOP) intel_gfx out mesa intel_icd.x86_64.json ] ;
 
 	AddFilesToPackage servers : IntelGfx ;
-	AddFilesToPackage bin : intel_gfx_ctl intel_gfx_cube intel_gfx_monitor ;
+	AddFilesToPackage bin : intel_gfx_ctl intel_gfx_cube
+		intel_gfx_vulkan_smoke intel_gfx_monitor ;
+	AddFilesToPackage demos : intel_gfx_cube : "IntelGfx Cube" ;
+	AddSymlinkToPackage data deskbar menu Demos
+		: "../../../../demos/IntelGfx Cube" : "IntelGfx Cube" ;
 	AddFilesToPackage add-ons input_server filters : intel_gfx_brightness_keys ;
 
 	AddFilesToPackage documentation packages intel_gfx :

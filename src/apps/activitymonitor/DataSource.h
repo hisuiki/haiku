@@ -265,6 +265,33 @@ private:
 };
 
 
+class GPUUsageDataSource : public DataSource {
+public:
+						GPUUsageDataSource();
+						GPUUsageDataSource(const GPUUsageDataSource& other);
+	virtual				~GPUUsageDataSource();
+
+	virtual DataSource*	Copy() const;
+
+	virtual void		Print(BString& text, int64 value) const;
+	virtual	int64		NextValue(SystemInfo& info);
+
+	virtual const char*	InternalName() const;
+	virtual const char*	Name() const;
+	virtual const char*	Label() const;
+	virtual const char*	ShortLabel() const;
+	virtual bool		Primary() const;
+
+private:
+			void		_Open();
+			void		_Close();
+
+	int					fFD;
+	uint64				fPreviousTicks;
+	bigtime_t			fPreviousTime;
+};
+
+
 class CPUFrequencyDataSource : public DataSource {
 public:
 						CPUFrequencyDataSource(int32 cpu = 0);

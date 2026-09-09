@@ -9,13 +9,19 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <Catalog.h>
+#include <Directory.h>
+#include <Entry.h>
 #include <OS.h>
+#include <Path.h>
 #include <String.h>
 #include <StringForRate.h>
 #include <StringForSize.h>
 
+#include "IntelGfxABI.h"
 #include "SystemInfo.h"
 
 #undef B_TRANSLATION_CONTEXT
@@ -30,6 +36,7 @@ const DataSource* kSources[] = {
 	new CPUFrequencyDataSource(),
 	new CPUUsageDataSource(),
 	new CPUCombinedUsageDataSource(),
+	new GPUUsageDataSource(),
 	new ThermalDataSource(),
 	new NetworkUsageDataSource(true),
 	new NetworkUsageDataSource(false),
@@ -1301,6 +1308,170 @@ CPUCombinedUsageDataSource::Primary() const
 //	#pragma mark -
 
 
+GPUUsageDataSource::GPUUsageDataSource()
+	:
+	fFD(-1),
+	fPreviousTicks(0),
+	fPreviousTime(0)
+{
+	fMinimum = 0;
+	fMaximum = 1000;
+	fColor = (rgb_color){0, 180, 170};
+	_Open();
+}
+
+
+GPUUsageDataSource::GPUUsageDataSource(const GPUUsageDataSource& other)
+	:
+	DataSource(other),
+	fFD(-1),
+	fPreviousTicks(0),
+	fPreviousTime(0)
+{
+	_Open();
+}
+
+
+GPUUsageDataSource::~GPUUsageDataSource()
+{
+	_Close();
+}
+
+
+DataSource*
+GPUUsageDataSource::Copy() const
+{
+	return new GPUUsageDataSource(*this);
+}
+
+
+void
+GPUUsageDataSource::Print(BString& text, int64 value) const
+{
+	text = "";
+	fNumberFormat.SetPrecision(1);
+	fNumberFormat.FormatPercent(text, value / 1000.0);
+}
+
+
+int64
+GPUUsageDataSource::NextValue(SystemInfo& info)
+{
+	if (fFD < 0)
+		_Open();
+	if (fFD < 0)
+		return 0;
+
+	IntelGfx::GpuActivity activity = IntelGfx::Request<IntelGfx::GpuActivity>();
+	if (ioctl(fFD, IntelGfx::kGpuActivity, &activity, sizeof(activity)) < 0) {
+		_Close();
+		return 0;
+	}
+
+	bigtime_t now = info.Time();
+	int64 value = 0;
+	if (fPreviousTime > 0 && now > fPreviousTime
+		&& activity.totalTicks >= fPreviousTicks && activity.timestampHz != 0) {
+		double busy = (double)(activity.totalTicks - fPreviousTicks) * 1000000.0
+			/ (double)activity.timestampHz / (double)(now - fPreviousTime);
+		value = (int64)(busy * 1000.0);
+		if (value < 0)
+			value = 0;
+		if (value > 1000)
+			value = 1000;
+	}
+
+	fPreviousTicks = activity.totalTicks;
+	fPreviousTime = now;
+	return value;
+}
+
+
+const char*
+GPUUsageDataSource::InternalName() const
+{
+	return "GPU usage";
+}
+
+
+const char*
+GPUUsageDataSource::Name() const
+{
+	return B_TRANSLATE("GPU usage");
+}
+
+
+const char*
+GPUUsageDataSource::Label() const
+{
+	return B_TRANSLATE("GPU usage");
+}
+
+
+const char*
+GPUUsageDataSource::ShortLabel() const
+{
+	return B_TRANSLATE("GPU");
+}
+
+
+bool
+GPUUsageDataSource::Primary() const
+{
+	return true;
+}
+
+
+void
+GPUUsageDataSource::_Open()
+{
+	if (fFD >= 0)
+		return;
+
+	BDirectory directory("/dev/graphics");
+	if (directory.InitCheck() != B_OK)
+		return;
+
+	BEntry entry;
+	while (directory.GetNextEntry(&entry) == B_OK) {
+		char name[B_FILE_NAME_LENGTH];
+		if (entry.GetName(name) != B_OK
+			|| strncmp(name, "intel_extreme_", 14) != 0) {
+			continue;
+		}
+
+		BPath path;
+		if (entry.GetPath(&path) != B_OK)
+			continue;
+		int fd = open(path.Path(), O_RDWR);
+		if (fd < 0)
+			continue;
+
+		IntelGfx::GpuActivity activity
+			= IntelGfx::Request<IntelGfx::GpuActivity>();
+		if (ioctl(fd, IntelGfx::kGpuActivity, &activity, sizeof(activity)) >= 0) {
+			fFD = fd;
+			return;
+		}
+		close(fd);
+	}
+}
+
+
+void
+GPUUsageDataSource::_Close()
+{
+	if (fFD >= 0)
+		close(fFD);
+	fFD = -1;
+	fPreviousTicks = 0;
+	fPreviousTime = 0;
+}
+
+
+//	#pragma mark -
+
+
 PageFaultsDataSource::PageFaultsDataSource()
 	:
 	fPreviousFaults(0),
@@ -1642,5 +1813,4 @@ MediaNodesDataSource::AdaptiveScale() const
 {
 	return true;
 }
-
 

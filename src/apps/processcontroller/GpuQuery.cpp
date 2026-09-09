@@ -193,47 +193,62 @@ GpuQuery::Query()
 		fFrequencyMhz = ((reg.value >> 23) & 0x1ff) * 50 / 3;
 	}
 
+	GpuClientInfo current[kMaxActivityClients] = {};
+	uint32_t currentCount = 0;
+	for (uint32_t i = 0; i < activity.count && i < kMaxActivityClients; i++) {
+		uint32_t index = currentCount;
+		for (uint32_t j = 0; j < currentCount; j++) {
+			if (current[j].team == activity.clients[i].team) {
+				index = j;
+				break;
+			}
+		}
+		if (index == currentCount) {
+			current[index].team = activity.clients[i].team;
+			currentCount++;
+		}
+		current[index].contexts += activity.clients[i].contexts;
+		current[index].ticks += activity.clients[i].ticks;
+	}
+
 	now = system_time();
+	fClientCount = 0;
 	if (fLastTimestamp > 0 && now > fLastTimestamp) {
 		double dt = (now - fLastTimestamp) / 1000000.0;
 		double hz = activity.timestampHz > 0 ? activity.timestampHz : kGpuTimestampHz;
-		
+
 		uint64_t deltaTotal = 0;
 		if (activity.totalTicks >= fLastTotalTicks)
 			deltaTotal = activity.totalTicks - fLastTotalTicks;
 		fTotalUsage = (double)deltaTotal / (hz * dt);
 		if (fTotalUsage > 1.0) fTotalUsage = 1.0;
 		if (fTotalUsage < 0.0) fTotalUsage = 0.0;
-		
-		fClientCount = 0;
-		for (uint32_t i = 0; i < activity.count && i < kMaxActivityClients; i++) {
-			team_id team = activity.clients[i].team;
+
+		for (uint32_t i = 0; i < currentCount; i++) {
 			uint64_t delta = 0;
 			for (uint32_t j = 0; j < fLastClientCount; j++) {
-				if (fLastClients[j].team == team) {
-					if (activity.clients[i].ticks >= fLastClients[j].ticks)
-						delta = activity.clients[i].ticks - fLastClients[j].ticks;
+				if (fLastClients[j].team == current[i].team) {
+					if (current[i].ticks >= fLastClients[j].ticks)
+						delta = current[i].ticks - fLastClients[j].ticks;
 					break;
 				}
 			}
-			
+
 			double usage = (double)delta / (hz * dt);
 			if (usage > 1.0) usage = 1.0;
 			if (usage < 0.0) usage = 0.0;
-			
-			fClients[fClientCount].team = team;
-			fClients[fClientCount].contexts = activity.clients[i].contexts;
-			fClients[fClientCount].ticks = activity.clients[i].ticks;
+
+			fClients[fClientCount] = current[i];
 			fClients[fClientCount].usage = usage;
 			fClientCount++;
 		}
 	}
-	
+
 	fLastTotalTicks = activity.totalTicks;
-	fLastClientCount = activity.count;
-	for (uint32_t i = 0; i < activity.count && i < kMaxActivityClients; i++) {
-		fLastClients[i].team = activity.clients[i].team;
-		fLastClients[i].ticks = activity.clients[i].ticks;
+	fLastClientCount = currentCount;
+	for (uint32_t i = 0; i < currentCount; i++) {
+		fLastClients[i].team = current[i].team;
+		fLastClients[i].ticks = current[i].ticks;
 	}
 	fLastTimestamp = now;
 	fLock.Unlock();

@@ -1,6 +1,7 @@
 SubDir HAIKU_TOP src apps activitymonitor ;
 
 UsePrivateHeaders interface shared system ;
+UseHeaders [ FDirName $(HAIKU_TOP) intel_gfx headers ] ;
 
 Application ActivityMonitor :
 	ActivityMonitor.cpp
