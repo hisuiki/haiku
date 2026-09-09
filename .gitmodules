@@ -1,0 +1,3 @@
+[submodule "intel_gfx"]
+	path = intel_gfx
+	url = https://github.com/hisuiki/IntelGfx.git

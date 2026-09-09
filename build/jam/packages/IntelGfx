@@ -1,0 +1,47 @@
+if $(TARGET_PACKAGING_ARCH) = x86_64
+	&& $(HAIKU_BUILD_TYPE) != bootstrap {
+	local vulkanFileName = vulkan-1.4.311-1-x86_64.hpkg ;
+	local vulkanDownload = [ DownloadFile $(vulkanFileName) :
+		https://haikuports-repository.cdn.haiku-os.org/master/x86_64/current/packages/$(vulkanFileName) ] ;
+	local vulkanPackage = <intel-gfx>intel-gfx-vulkan-loader.hpkg ;
+	MakeLocate $(vulkanPackage) : $(HAIKU_DOWNLOAD_DIR) ;
+	Depends $(vulkanPackage) : $(vulkanDownload) ;
+
+	actions VerifyIntelGfxVulkanPackage
+	{
+		actual=`$(HOST_SHA256) "$(2)" | sed 's/[[:space:]].*//'`
+		test "$actual" = d338597518dccd1dc4856080c0b3d8cd22fa1c3c81014b9f870eade2988ee6f2 || {
+			echo "Vulkan loader package checksum mismatch" >&2
+			exit 1
+		}
+		cp -f "$(2)" "$(1)"
+	}
+	VerifyIntelGfxVulkanPackage $(vulkanPackage) : $(vulkanDownload) ;
+
+	local intelGfxPackage = intel_gfx.hpkg ;
+	HaikuPackage $(intelGfxPackage) ;
+
+	AddDriversToPackage graphics : intel_extreme ;
+	AddFilesToPackage add-ons accelerants : intel_extreme.accelerant ;
+	AddFilesToPackage add-ons opengl :
+		[ FDirName $(HAIKU_TOP) intel_gfx out mesa "Intel Gallium" ] ;
+	AddFilesToPackage lib :
+		[ FDirName $(HAIKU_TOP) intel_gfx out mesa libvulkan_intel.so ] ;
+	AddFilesToPackage add-ons vulkan icd.d :
+		[ FDirName $(HAIKU_TOP) intel_gfx out mesa intel_icd.x86_64.json ] ;
+
+	AddFilesToPackage servers : IntelGfx ;
+	AddFilesToPackage bin : intel_gfx_ctl intel_gfx_cube intel_gfx_monitor ;
+	AddFilesToPackage add-ons input_server filters : intel_gfx_brightness_keys ;
+
+	AddFilesToPackage documentation packages intel_gfx :
+		[ FDirName $(HAIKU_TOP) intel_gfx README.md ] : README.md ;
+	AddFilesToPackage documentation packages intel_gfx :
+		[ FDirName $(HAIKU_TOP) intel_gfx UPSTREAM.json ] : UPSTREAM.json ;
+	AddFilesToPackage data licenses :
+		[ FDirName $(HAIKU_TOP) intel_gfx License.md ] : IntelGfx ;
+	AddFilesToPackage data launch :
+		[ FDirName $(HAIKU_TOP) intel_gfx package intel_gfx.launch ] : intel_gfx ;
+
+	BuildHaikuPackage $(intelGfxPackage) : intel_gfx ;
+}

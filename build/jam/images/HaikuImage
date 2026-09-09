@@ -25,6 +25,14 @@ AddPackageFilesToHaikuImage system packages :
 	nameFromMetaInfo
 	;
 
+if $(TARGET_PACKAGING_ARCH) = x86_64
+	&& $(HAIKU_BUILD_TYPE) != bootstrap {
+	AddPackageFilesToHaikuImage system packages :
+		intel_gfx.hpkg
+		<intel-gfx>intel-gfx-vulkan-loader.hpkg
+		: nameFromMetaInfo ;
+}
+
 if $(HAIKU_BUILD_TYPE) = test {
 	AddPackageFilesToHaikuImage system packages : haiku_unittests.hpkg ;
 }

@@ -24,6 +24,7 @@ if $(HAIKU_BUILD_TYPE) = test {
 
 local archDependentPackages =
 	HaikuCrossDevel
+	IntelGfx
 	WebPositive
 	;
 

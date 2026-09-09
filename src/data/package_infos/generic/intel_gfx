@@ -1,0 +1,30 @@
+name			intel_gfx
+version			0.3.5-1
+architecture	%HAIKU_PACKAGING_ARCH%
+summary			"Unified Intel display, OpenGL, and Vulkan graphics stack"
+
+description		"IntelGfx is Haiku's unified Intel graphics package. It
+contains the intel_extreme kernel driver and display accelerant, the Mesa Iris
+OpenGL renderer, Intel Vulkan ANV with native Haiku WSI, a device service, and
+diagnostic tools."
+
+packager		"The Haiku build system"
+vendor			"Haiku Project"
+copyrights {
+	"2006-2026 Haiku, Inc. and contributors"
+	"2026 IntelGfx contributors"
+}
+licenses		"IntelGfx"
+
+provides {
+	intel_gfx = 0.3.5
+	mesa_iris = 22.0.5
+	mesa_vulkan_intel = 22.0.5
+	cmd:intel_gfx_ctl = 0.3.5
+}
+
+requires {
+	haiku
+	mesa == 22.0.5 base
+	vulkan
+}

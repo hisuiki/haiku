@@ -147,6 +147,9 @@ if $(HAIKU_DONT_INCLUDE_SRC) {
 } else {
 	SubInclude HAIKU_TOP src ;
 }
+if $(TARGET_ARCH) = x86_64 {
+	SubInclude HAIKU_TOP intel_gfx ;
+}
 if $(HAIKU_INCLUDE_3RDPARTY) {
 	SubInclude HAIKU_TOP 3rdparty ;
 }

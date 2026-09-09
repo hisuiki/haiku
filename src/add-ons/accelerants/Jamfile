@@ -6,7 +6,9 @@ SubInclude HAIKU_TOP src add-ons accelerants common ;
 SubInclude HAIKU_TOP src add-ons accelerants et6x00 ;
 SubInclude HAIKU_TOP src add-ons accelerants framebuffer ;
 SubInclude HAIKU_TOP src add-ons accelerants intel_810 ;
-SubInclude HAIKU_TOP src add-ons accelerants intel_extreme ;
+if $(TARGET_ARCH) != x86_64 {
+	SubInclude HAIKU_TOP src add-ons accelerants intel_extreme ;
+}
 SubInclude HAIKU_TOP src add-ons accelerants matrox ;
 SubInclude HAIKU_TOP src add-ons accelerants neomagic ;
 SubInclude HAIKU_TOP src add-ons accelerants nvidia ;
