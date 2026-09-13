@@ -78,8 +78,8 @@ rule DefineDefaultBuildProfiles
 	switch $(HAIKU_BUILD_PROFILE) {
 		case "release-*" : {
 			Echo Building Haiku R1/development preview ;
-			HAIKU_ROOT_USER_NAME ?= user ;
-			HAIKU_ROOT_USER_REAL_NAME ?= "Yourself" ;
+			HAIKU_DEFAULT_USER_NAME ?= user ;
+			HAIKU_DEFAULT_USER_REAL_NAME ?= "Yourself" ;
 			AddGroupToHaikuImage party : 101 : user sshd ;
 			HAIKU_IMAGE_HOST_NAME ?= shredder ;
 
@@ -134,8 +134,8 @@ rule DefineDefaultBuildProfiles
 
 		case "nightly-*" : {
 			Echo Building Haiku Nightly ;
-			HAIKU_ROOT_USER_NAME ?= user ;
-			HAIKU_ROOT_USER_REAL_NAME ?= "Yourself" ;
+			HAIKU_DEFAULT_USER_NAME ?= user ;
+			HAIKU_DEFAULT_USER_REAL_NAME ?= "Yourself" ;
 			AddGroupToHaikuImage party : 101 : user sshd ;
 			HAIKU_IMAGE_HOST_NAME ?= shredder ;
 			if $(DEBUG) != 0 {
@@ -191,8 +191,8 @@ rule DefineDefaultBuildProfiles
 
 		case "test-*" : {
 			Echo Building Haiku UnitTest Target ;
-			HAIKU_ROOT_USER_NAME = user ;
-			HAIKU_ROOT_USER_REAL_NAME = "Tester" ;
+			HAIKU_DEFAULT_USER_NAME = user ;
+			HAIKU_DEFAULT_USER_REAL_NAME = "Tester" ;
 			HAIKU_IMAGE_HOST_NAME ?= shredder ;
 			if $(DEBUG) != 0 {
 				HAIKU_IMAGE_SIZE ?= 450 ;

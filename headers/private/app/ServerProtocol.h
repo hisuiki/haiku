@@ -368,6 +368,15 @@ enum {
 	AS_VIEW_CLIP_TO_RECT,
 	AS_VIEW_CLIP_TO_SHAPE,
 
+	// Gives the display to the desktop of a given user, so that a session can
+	// be brought to the front without the one it replaces being shut down.
+	// Only the launch daemon, running as root, may ask for this.
+	AS_ACTIVATE_DESKTOP,
+
+	// Drops the desktop of a session that has ended. Only the launch daemon,
+	// running as root, may ask for this.
+	AS_CLOSE_DESKTOP,
+
 	AS_LAST_CODE
 };
 

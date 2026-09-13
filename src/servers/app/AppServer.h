@@ -44,16 +44,25 @@ public:
 	virtual	void				MessageReceived(BMessage* message);
 	virtual	bool				QuitRequested();
 
+			void				InputServerRegistered();
+
 private:
 			Desktop*			_CreateDesktop(uid_t userID,
-									const char* targetScreen);
+									const char* targetScreen,
+									pid_t sessionID = 0);
+			status_t			_ActivateDesktop(uid_t userID,
+									bool createIfNeeded,
+									pid_t sessionID = 0);
 	virtual	Desktop*			_FindDesktop(uid_t userID,
 									const char* targetScreen);
+			Desktop*			_FindDesktopForSession(pid_t sessionID);
+			status_t			_CloseDesktop(pid_t sessionID);
 
 			void				_LaunchInputServer();
 
 private:
 			BObjectList<Desktop> fDesktops;
+			Desktop*			fActiveDesktop;
 			BLocker				fDesktopLock;
 };
 

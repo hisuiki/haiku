@@ -240,6 +240,9 @@ get_user_home_path(char* buffer, size_t bufferSize)
 	if (user == 0) {
 		// TODO: this is a work-around as the launch_daemon, and the registrar
 		// must not call getpwuid_r().
+		ssize_t result = __getenv_reentrant("HOME", buffer, bufferSize);
+		if (result >= 0)
+			return result;
 		return strlcpy(buffer, kUserDirectory, bufferSize);
 	}
 

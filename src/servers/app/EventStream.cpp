@@ -53,6 +53,7 @@ InputServerStream::InputServerStream(BMessenger& messenger)
 	fInputServer(messenger),
 	fPort(-1),
 	fQuitting(false),
+	fStopped(false),
 	fLatestMouseMoved(NULL)
 {
 	BMessage message(IS_ACQUIRE_INPUT);
@@ -78,6 +79,7 @@ InputServerStream::InputServerStream(BMessenger& messenger)
 InputServerStream::InputServerStream()
 	:
 	fQuitting(false),
+	fStopped(false),
 	fCursorSemaphore(-1),
 	fLatestMouseMoved(NULL)
 {
@@ -89,6 +91,19 @@ InputServerStream::InputServerStream()
 InputServerStream::~InputServerStream()
 {
 	delete_area(fCursorArea);
+}
+
+
+void
+InputServerStream::Restart()
+{
+	fStopped = false;
+	fQuitting = false;
+	while (!fEvents.IsEmpty())
+		delete fEvents.NextMessage();
+	fLatestMouseMoved = NULL;
+	if (fCursorBuffer != NULL)
+		atomic_and(&fCursorBuffer->read, 0);
 }
 
 
@@ -107,7 +122,15 @@ void
 InputServerStream::SendQuit()
 {
 	fQuitting = true;
-	write_port(fPort, 'quit', NULL, 0);
+	fStopped = true;
+
+	// Only to wake the loop, which stops on the flag above: a 'quit' would
+	// make it treat the port as gone, and the stream is handed to the next
+	// desktop that takes the screen. Never wait here either - the port can be
+	// full of input the loop has not taken yet, and the thread asking it to
+	// stop would then be waiting for the thread it is stopping.
+	write_port_etc(fPort, 'stop', NULL, 0, B_RELATIVE_TIMEOUT, 0);
+
 	release_sem(fCursorSemaphore);
 }
 
@@ -126,6 +149,9 @@ bool
 InputServerStream::GetNextEvent(BMessage** _event)
 {
 	while (fEvents.IsEmpty()) {
+		if (fStopped)
+			return false;
+
 		// wait for new events
 		BMessage* event;
 		status_t status = _MessageFromPort(&event);
@@ -255,6 +281,10 @@ InputServerStream::_MessageFromPort(BMessage** _message, bigtime_t timeout)
 	if (code == 'quit') {
 		// this will cause GetNextEvent() to return false
 		return B_BAD_PORT_ID;
+	}
+	if (code == 'stop') {
+		// the stream was asked to stop; the loop checks for that itself
+		return B_INTERRUPTED;
 	}
 	if (code == 'insm') {
 		// a message has been inserted into our queue

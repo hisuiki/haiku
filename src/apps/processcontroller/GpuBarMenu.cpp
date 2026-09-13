@@ -140,6 +140,11 @@ GpuBarMenu::_Refresh()
 		GpuClientInfo client;
 		if (!gGpuQuery->GetClientInfo(c, client))
 			continue;
+		team_info teamInfo;
+		if (get_team_info(client.team, &teamInfo) != B_OK
+			|| !is_team_visible(teamInfo)) {
+			continue;
+		}
 
 		char name[B_PATH_NAME_LENGTH] = "Unknown";
 		BBitmap* icon = NULL;

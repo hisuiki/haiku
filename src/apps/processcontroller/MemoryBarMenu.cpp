@@ -110,6 +110,8 @@ MemoryBarMenu::Pulse()
 	info_pack infos;
 	item = NULL;
 	while (get_next_team_info(&cookie, &infos.team_info) == B_OK) {
+		if (!is_team_visible(infos.team_info))
+			continue;
 		unsigned int j = 0;
 		while (j < fTeamCount && infos.team_info.team != fTeamList[j]) {
 			j++;

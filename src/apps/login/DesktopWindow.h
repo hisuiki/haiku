@@ -10,14 +10,13 @@
 
 class DesktopWindow : public BWindow {
 	public:
-					DesktopWindow(BRect frame, bool editMode);
+					DesktopWindow(BRect frame);
 		virtual		~DesktopWindow();
 
 		bool		QuitRequested();
 		void		DispatchMessage(BMessage *message, BHandler *handler);
 
 	private:
-		bool		fEditShelfMode;
 
 		//TODO:
 		BShelf*			fDesktopShelf;

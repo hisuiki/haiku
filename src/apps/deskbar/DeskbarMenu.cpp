@@ -293,6 +293,16 @@ B_TRANSLATE_MARK_VOID("About this system")
 
 	AddSeparatorItem();
 
+	item = new BMenuItem(B_TRANSLATE("Lock screen"), new BMessage(kLockSession));
+	item->SetEnabled(!dragging);
+	item->SetTarget(be_app);
+	AddItem(item);
+
+	item = new BMenuItem(B_TRANSLATE("Log out"), new BMessage(kLogOutUser));
+	item->SetEnabled(!dragging);
+	item->SetTarget(be_app);
+	AddItem(item);
+
 	BMenu* shutdownMenu = new BMenu(B_TRANSLATE("Shutdown" B_UTF8_ELLIPSIS));
 
 	item = new BMenuItem(B_TRANSLATE("Power off"),
@@ -380,6 +390,7 @@ TDeskbarMenu::ResetTargets()
 				case kRebootSystem:
 				case kSuspendSystem:
 				case kShutdownSystem:
+				case kLogOutUser:
 				case kRealignReplicants:
 				case kShowHideTime:
 				case kShowSeconds:

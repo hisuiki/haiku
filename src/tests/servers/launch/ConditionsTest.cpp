@@ -34,6 +34,7 @@ class ConditionsTest : public CppUnit::TestFixture {
 	CPPUNIT_TEST(TestEmpty);
 	CPPUNIT_TEST(TestSafemode);
 	CPPUNIT_TEST(TestFileExists);
+	CPPUNIT_TEST(TestEnvironment);
 	CPPUNIT_TEST(TestOr);
 	CPPUNIT_TEST(TestAnd);
 	CPPUNIT_TEST(TestNot);
@@ -96,6 +97,27 @@ public:
 
 		condition = _Condition("file_exists /boot/don't fool me!");
 		CPPUNIT_ASSERT(!condition->Test(sConditionContext));
+	}
+
+	void TestEnvironment()
+	{
+		setenv("HAIKU_TEST_SESSION", "login", true);
+
+		Condition* condition = _Condition(
+			"environment HAIKU_TEST_SESSION login");
+		CPPUNIT_ASSERT(condition->Test(sConditionContext));
+		CPPUNIT_ASSERT(condition->IsConstant(sConditionContext));
+		delete condition;
+
+		condition = _Condition("environment HAIKU_TEST_SESSION desktop");
+		CPPUNIT_ASSERT(!condition->Test(sConditionContext));
+		delete condition;
+
+		condition = _Condition("environment HAIKU_TEST_SESSION");
+		CPPUNIT_ASSERT(condition->Test(sConditionContext));
+		delete condition;
+
+		unsetenv("HAIKU_TEST_SESSION");
 	}
 
 	void TestOr()

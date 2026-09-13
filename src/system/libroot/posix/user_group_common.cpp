@@ -87,6 +87,24 @@ BPrivate::send_authentication_request_to_registrar(KMessage& request,
 }
 
 
+status_t
+BPrivate::authenticate_user(const char* name, const char* password)
+{
+	if (name == NULL || name[0] == '\0' || password == NULL)
+		return B_BAD_VALUE;
+
+	KMessage request(B_REG_AUTHENTICATE_USER);
+	status_t error = request.AddString("name", name);
+	if (error == B_OK)
+		error = request.AddString("password", password);
+	if (error != B_OK)
+		return error;
+
+	KMessage reply;
+	return send_authentication_request_to_registrar(request, reply);
+}
+
+
 class BPrivate::Tokenizer {
 public:
 	Tokenizer(char* string)

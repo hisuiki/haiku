@@ -20,6 +20,8 @@
 #include <Catalog.h>
 #include <GroupLayoutBuilder.h>
 #include <IconView.h>
+#include <LaunchRoster.h>
+#include <LaunchRosterPrivate.h>
 #include <LayoutBuilder.h>
 #include <LocaleRoster.h>
 #include <Message.h>
@@ -253,6 +255,14 @@ TeamMonitorWindow::~TeamMonitorWindow()
 }
 
 
+static void
+launch_for_display_user(const char* program)
+{
+	BLaunchRoster roster;
+	BLaunchRoster::Private(roster).LaunchInDisplaySession(program);
+}
+
+
 void
 TeamMonitorWindow::MessageReceived(BMessage* msg)
 {
@@ -278,7 +288,7 @@ TeamMonitorWindow::MessageReceived(BMessage* msg)
 			break;
 
 		case kMsgLaunchTerminal:
-			be_roster->Launch("application/x-vnd.Haiku-Terminal");
+			launch_for_display_user("/boot/system/apps/Terminal");
 			PostMessage(B_QUIT_REQUESTED);
 			break;
 
@@ -310,10 +320,12 @@ TeamMonitorWindow::MessageReceived(BMessage* msg)
 
 		case TM_RESTART_DESKTOP:
 		{
-			if (!be_roster->IsRunning(kTrackerSignature))
-				be_roster->Launch(kTrackerSignature);
-			if (!be_roster->IsRunning(kDeskbarSignature))
-				be_roster->Launch(kDeskbarSignature);
+			if (!be_roster->IsRunning(kTrackerSignature)) {
+				launch_for_display_user("/boot/system/Tracker");
+			}
+			if (!be_roster->IsRunning(kDeskbarSignature)) {
+				launch_for_display_user("/boot/system/Deskbar");
+			}
 			fRestartButton->Hide();
 			SetDefaultButton(fCancelButton);
 			break;

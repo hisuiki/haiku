@@ -348,6 +348,23 @@ Job::SetDefaultPort(port_id port)
 }
 
 
+const BString&
+Job::UserName() const
+{
+	return fUserName;
+}
+
+
+void
+Job::SetUserName(const char* user)
+{
+	fUserName = user;
+}
+
+
+static const char* const kLaunchAsProgram = "/bin/launch_as";
+
+
 status_t
 Job::Launch()
 {
@@ -380,9 +397,18 @@ Job::Launch()
 
 	// Build argument vector
 
+	// A job with an account of its own is launched through the helper that
+	// drops to that account and then runs the program in the same team, so
+	// that everything below still sees the team it launched.
+	BStringList arguments(fArguments);
+	if (!fUserName.IsEmpty()) {
+		arguments.Add(fUserName, 0);
+		arguments.Add(kLaunchAsProgram, 0);
+	}
+
 	entry_ref ref;
 	status_t status = get_ref_for_path(
-		Utility::TranslatePath(fArguments.StringAt(0).String()), &ref);
+		Utility::TranslatePath(arguments.StringAt(0).String()), &ref);
 	if (status != B_OK) {
 		_SetLaunchStatus(status);
 		return status;
@@ -391,10 +417,10 @@ Job::Launch()
 	std::vector<BString> strings;
 	std::vector<const char*> args;
 
-	size_t count = fArguments.CountStrings() - 1;
+	size_t count = arguments.CountStrings() - 1;
 	if (count > 0) {
-		for (int32 i = 1; i < fArguments.CountStrings(); i++) {
-			strings.push_back(Utility::TranslatePath(fArguments.StringAt(i)));
+		for (int32 i = 1; i < arguments.CountStrings(); i++) {
+			strings.push_back(Utility::TranslatePath(arguments.StringAt(i)));
 			args.push_back(strings.back());
 		}
 		args.push_back(NULL);

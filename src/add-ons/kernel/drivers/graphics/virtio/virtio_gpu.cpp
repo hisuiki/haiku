@@ -11,6 +11,7 @@
 #include <lock.h>
 #include <virtio.h>
 #include <virtio_info.h>
+#include <vm/vm.h>
 
 #include <util/AutoLock.h>
 
@@ -726,6 +727,21 @@ virtio_gpu_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 		// needed to share data between kernel and accelerant
 		case VIRTIO_GPU_GET_PRIVATE_DATA:
 			return user_memcpy(buffer, &info->sharedArea, sizeof(area_id));
+
+		case VIRTIO_GPU_CLONE_FRAME_BUFFER:
+		{
+			// Clone the framebuffer into the caller's address space, so the
+			// accelerant (running inside a possibly unprivileged app_server)
+			// gets its own mapping instead of a bare kernel pointer.
+			void* base;
+			area_id area = vm_clone_area(B_CURRENT_TEAM,
+				"cloned virtio_gpu framebuffer", &base, B_ANY_ADDRESS,
+				B_READ_AREA | B_WRITE_AREA, 0, info->framebufferArea, true);
+			if (area < 0)
+				return area;
+
+			return _user_get_area_info(area, (area_info*)buffer);
+		}
 
 		case VIRTIO_GPU_SET_DISPLAY_MODE:
 		{

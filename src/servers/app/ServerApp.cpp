@@ -520,10 +520,9 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 				break;
 			}
 
-			// TODO: this should be done using notifications (so that an
-			// abandoned stream will get noticed directly)
-			if (fDesktop->EventDispatcher().InitCheck() != B_OK)
-				fDesktop->EventDispatcher().SetTo(gInputManager->GetStream());
+			AppServer* appServer = static_cast<AppServer*>(be_app);
+			if (appServer != NULL)
+				appServer->InputServerRegistered();
 			break;
 		}
 

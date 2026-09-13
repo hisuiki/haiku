@@ -39,6 +39,9 @@ public:
 									ScreenConfigurations& currentConfigurations,
 									uint32* _changedScreens = NULL);
 
+			status_t			SetOffscreen(Screen* screen);
+			void				Release();
+
 			status_t			AddScreen(Screen* screen,
 									const ScreenConfigurations& configurations,
 									ScreenConfigurations& currentConfigurations);

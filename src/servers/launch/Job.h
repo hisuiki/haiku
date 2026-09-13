@@ -62,6 +62,9 @@ public:
 			BStringList&		Arguments();
 			void				AddArgument(const char* argument);
 
+			const BString&		UserName() const;
+			void				SetUserName(const char* user);
+
 			::Target*			Target() const;
 			void				SetTarget(::Target* target);
 
@@ -126,6 +129,7 @@ private:
 
 private:
 			BStringList			fArguments;
+			BString				fUserName;
 			BStringList			fRequirements;
 			bool				fEnabled;
 			bool				fService;

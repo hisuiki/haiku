@@ -24,11 +24,12 @@ Application launch_daemon
 
 	# init jobs
 	AbstractEmptyDirectoryJob.cpp
+	InitHomeLayoutJob.cpp
 	InitRealTimeClockJob.cpp
 	InitSharedMemoryDirectoryJob.cpp
 	InitTemporaryDirectoryJob.cpp
 	:
-	be network bnetapi shared libmultiuser_utils.a [ TargetLibstdc++ ]
+	be network bnetapi shared libmultiuser_utils.a libbsd.so [ TargetLibstdc++ ]
 	:
 	LaunchDaemon.rdef
 ;

@@ -33,7 +33,7 @@ if $(HAIKU_INCLUDE_SOURCES) = 1 {
 # BeBook
 if [ IsOptionalHaikuImagePackageAdded BeBook ] {
 	AddHaikuImageSystemPackages be_book ;
-	AddSymlinkToHaikuImage home Desktop
+	AddSymlinkToHaikuImage home user Desktop
 		: /boot/system/documentation/BeBook/index.html
 		: BeBook ;
 }
@@ -190,9 +190,9 @@ if [ IsOptionalHaikuImagePackageAdded Welcome ] {
 		haiku_welcome
 		;
 
-	AddSymlinkToHaikuImage home Desktop	: /boot/system/bin/quicktour
+	AddSymlinkToHaikuImage home user Desktop	: /boot/system/bin/quicktour
 		: Quick\ Tour ;
 
-	AddSymlinkToHaikuImage home Desktop	: /boot/system/bin/userguide
+	AddSymlinkToHaikuImage home user Desktop	: /boot/system/bin/userguide
 		: User\ Guide ;
 }

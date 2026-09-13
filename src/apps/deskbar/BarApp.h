@@ -60,6 +60,8 @@ const uint32 kAddTeam = 'AdTm';
 const uint32 kRemoveTeam = 'RmTm';
 const uint32 kRestart = 'Rtrt';
 const uint32 kShutDown = 'ShDn';
+const uint32 kLogOutUser = 'LgOt';
+const uint32 kLockSession = 'LkSn';
 
 // from roster_private.h
 const uint32 kShutdownSystem = 301;

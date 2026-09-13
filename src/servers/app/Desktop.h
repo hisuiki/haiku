@@ -38,6 +38,7 @@
 #include "MultiLocker.h"
 #include "Screen.h"
 #include "ScreenManager.h"
+#include "ServerBitmap.h"
 #include "ServerCursor.h"
 #include "StackAndTile.h"
 #include "VirtualScreen.h"
@@ -73,6 +74,12 @@ public:
 			status_t			Init();
 
 			uid_t				UserID() const { return fUserID; }
+
+			// The session whose clients this desktop is for; their teams
+			// all share it, which is how a client is placed on a seat.
+			pid_t				SessionID() const { return fSessionID; }
+			void				SetSessionID(pid_t session)
+									{ fSessionID = session; }
 			const char*			TargetScreen() { return fTargetScreen; }
 	virtual port_id				MessagePort() const { return fMessagePort; }
 			area_id				SharedReadOnlyArea() const
@@ -152,7 +159,12 @@ public:
 	virtual	void				ScreenRemoved(Screen* screen) {}
 	virtual	void				ScreenAdded(Screen* screen) {}
 	virtual	void				ScreenChanged(Screen* screen);
-	virtual	bool				ReleaseScreen(Screen* screen) { return false; }
+	virtual	bool				ReleaseScreen(Screen* screen);
+
+			status_t			SuspendScreen();
+			status_t			ResumeScreen();
+			bool				IsScreenSuspended() const
+									{ return fScreenSuspended; }
 
 	// Workspace methods
 
@@ -271,6 +283,8 @@ public:
 			Window*				WindowForClientLooperPort(port_id port);
 
 			StackAndTile*		GetStackAndTile() { return &fStackAndTile; }
+
+			void				TakeInput();
 private:
 			WindowList&			_Windows(int32 index);
 
@@ -315,6 +329,10 @@ private:
 									BRegion& stillAvailableOnScreen);
 			void				_TriggerWindowRedrawing(
 									BRegion& dirtyRegion, BRegion& exposeRegion);
+			void				_FillScreen(const rgb_color& color);
+			status_t			_TakeScreen();
+			void				_SetWindowsHWInterface(
+									::HWInterface* interface);
 			void				_SetBackground(BRegion& background);
 
 			status_t			_ActivateApp(team_id team);
@@ -352,6 +370,12 @@ private:
 			BLocker				fDirectScreenLock;
 			team_id				fDirectScreenTeam;
 			int32				fCurrentWorkspace;
+			bool				fScreenSuspended;
+			pid_t				fSessionID;
+			ObjectDeleter<Screen>
+								fOffscreenScreen;
+			BReference<ServerBitmap>
+								fOffscreenBitmap;
 			int32				fPreviousWorkspace;
 
 			WindowList			fAllWindows;

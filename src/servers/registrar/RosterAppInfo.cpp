@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include <Entry.h>
+#include <OS.h>
 #include <SupportDefs.h>
 
 
@@ -22,7 +23,9 @@ RosterAppInfo::RosterAppInfo()
 	: app_info(),
 	state(APP_STATE_UNREGISTERED),
 	token(0),
-	registration_time(0)
+	registration_time(0),
+	session(0),
+	uid(0)
 {
 }
 
@@ -33,7 +36,7 @@ RosterAppInfo::Init(thread_id thread, team_id team, port_id port, uint32 flags,
 	const entry_ref *ref, const char *signature)
 {
 	this->thread = thread;
-	this->team = team;
+	SetTeam(team);
 	this->port = port;
 	this->flags = flags;
 	BEntry entry(ref, true);
@@ -43,6 +46,25 @@ RosterAppInfo::Init(thread_id thread, team_id team, port_id port, uint32 flags,
 		strlcpy(this->signature, signature, B_MIME_TYPE_LENGTH);
 	else
 		this->signature[0] = '\0';
+}
+
+
+/*!	Sets the team the application runs in, and with it the session and the user
+	the roster tells one application's clients from another's by.
+*/
+void
+RosterAppInfo::SetTeam(team_id team)
+{
+	this->team = team;
+
+	team_info teamInfo;
+	if (team >= 0 && get_team_info(team, &teamInfo) == B_OK) {
+		this->session = teamInfo.session_id;
+		this->uid = teamInfo.uid;
+	} else {
+		this->session = 0;
+		this->uid = 0;
+	}
 }
 
 
@@ -56,6 +78,8 @@ RosterAppInfo::Clone() const
 
 	clone->Init(thread, team, port, flags, &ref, signature);
 	clone->registration_time = registration_time;
+	clone->session = session;
+	clone->uid = uid;
 	return clone;
 }
 

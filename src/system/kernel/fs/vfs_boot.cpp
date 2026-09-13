@@ -228,6 +228,13 @@ DiskBootMethod::IsBootDevice(KDiskDevice* device, bool strict)
 			if (fMethod == BOOT_METHOD_CD)
 				break;
 
+			// The non-strict pass exists so a device whose checksums don't
+			// match still gets a chance via the content-based check in
+			// IsBootPartition(); requiring them here regardless of "strict"
+			// defeated that fallback.
+			if (!strict)
+				break;
+
 			// check if the check sums match, too
 			for (int32 i = 0; i < NUM_DISK_CHECK_SUMS; i++) {
 				if (disk->device.unknown.check_sums[i].offset == -1)
@@ -546,8 +553,8 @@ vfs_mount_boot_file_system(kernel_args* args)
 				strerror(packageMount));
 		}
 
-		packageMount = _kern_mount("/boot/home/config", NULL, kPackageFSName, 0,
-			"packages /boot/home/config/packages; type home",
+		packageMount = _kern_mount("/boot/home/user/config", NULL, kPackageFSName, 0,
+			"packages /boot/home/user/config/packages; type home",
 			0 /* unused argument length */);
 		if (packageMount < 0) {
 			dprintf("Failed to mount home packagefs: %s\n",
@@ -574,4 +581,3 @@ vfs_mount_boot_file_system(kernel_args* args)
 	manager->RescanDiskSystems();
 	manager->StartMonitoring();
 }
-

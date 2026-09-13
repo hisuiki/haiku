@@ -49,18 +49,20 @@
 #define kSystemNonpackagedBinDirectory 	"/boot/system/non-packaged/bin"
 #define kSystemNonpackagedLibDirectory 	"/boot/system/non-packaged/lib"
 
-#define kUserDirectory 					"/boot/home"
-#define kUserConfigDirectory 			"/boot/home/config"
-#define kUserAddonsDirectory 			"/boot/home/config/add-ons"
-#define kUserBinDirectory 				"/boot/home/config/bin"
-#define kUserLibDirectory 				"/boot/home/config/lib"
-#define kUserPackagesDirectory	 		"/boot/home/config/packages"
-#define kUserSettingsDirectory 			"/boot/home/config/settings"
-#define kUserSettingsGlobalDirectory 	"/boot/home/config/settings/global"
-#define kUserNonpackagedDirectory		"/boot/home/config/non-packaged"
-#define kUserNonpackagedAddonsDirectory "/boot/home/config/non-packaged/add-ons"
-#define kUserNonpackagedBinDirectory 	"/boot/home/config/non-packaged/bin"
-#define kUserNonpackagedLibDirectory 	"/boot/home/config/non-packaged/lib"
+// The home of uid 0. A multi-user system keeps each account's home in
+// /boot/home/<name>, and uid 0's is /boot/home/user.
+#define kUserDirectory 					"/boot/home/user"
+#define kUserConfigDirectory 			"/boot/home/user/config"
+#define kUserAddonsDirectory 			"/boot/home/user/config/add-ons"
+#define kUserBinDirectory 				"/boot/home/user/config/bin"
+#define kUserLibDirectory 				"/boot/home/user/config/lib"
+#define kUserPackagesDirectory	 		"/boot/home/user/config/packages"
+#define kUserSettingsDirectory 			"/boot/home/user/config/settings"
+#define kUserSettingsGlobalDirectory 	"/boot/home/user/config/settings/global"
+#define kUserNonpackagedDirectory		"/boot/home/user/config/non-packaged"
+#define kUserNonpackagedAddonsDirectory "/boot/home/user/config/non-packaged/add-ons"
+#define kUserNonpackagedBinDirectory 	"/boot/home/user/config/non-packaged/bin"
+#define kUserNonpackagedLibDirectory 	"/boot/home/user/config/non-packaged/lib"
 
 
 #endif	// _SYSTEM_DIRECTORIES_H

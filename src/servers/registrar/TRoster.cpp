@@ -116,6 +116,59 @@ larger_index(const recent_entry* entry1, const recent_entry* entry2)
 }
 
 
+//! The session of the system services, which belong to no seat in particular.
+static const pid_t kSystemSession = 1;
+
+
+/*!	Whether a client running as \a uid in \a session has any business knowing
+	about an application of \a appSession running as \a appUser. What runs on
+	another seat is not a client's to see unless it runs as the same user; the
+	system services, which sit outside every seat, are everyone's.
+*/
+static bool
+may_see(pid_t session, uid_t uid, pid_t appSession, uid_t appUser)
+{
+	return appSession <= 0 || appSession == kSystemSession
+		|| session == kSystemSession || session == appSession
+		|| uid == appUser;
+}
+
+
+static bool
+may_see(team_id team, const RosterAppInfo* info)
+{
+	team_info teamInfo;
+	if (team < 0 || get_team_info(team, &teamInfo) != B_OK)
+		return false;
+
+	return may_see(teamInfo.session_id, teamInfo.uid, info->session,
+		info->uid);
+}
+
+
+//!	Notifies only the watchers that may see the application concerned.
+class SessionWatcherFilter : public EventMaskWatcherFilter {
+public:
+	SessionWatcherFilter(uint32 event, const RosterAppInfo* info)
+		:
+		EventMaskWatcherFilter(event),
+		fInfo(info)
+	{
+	}
+
+	virtual bool Filter(Watcher* watcher, BMessage* message)
+	{
+		if (!EventMaskWatcherFilter::Filter(watcher, message))
+			return false;
+
+		return may_see(watcher->Target().Team(), fInfo);
+	}
+
+private:
+	const RosterAppInfo*	fInfo;
+};
+
+
 //	#pragma mark -
 
 
@@ -341,6 +394,7 @@ TRoster::HandleCompleteRegistration(BMessage* request)
 			// everything is fine -- set the values
 			RosterAppInfo* info = fRegisteredApps.InfoFor(team);
 			if (info && info->state == APP_STATE_PRE_REGISTERED) {
+				info->SetTeam(team);
 				info->thread = thread;
 				info->port = port;
 				info->state = APP_STATE_REGISTERED;
@@ -552,7 +606,7 @@ TRoster::HandleSetThreadAndTeam(BMessage* request)
 			// move the app_info from the list of the early pre-registered
 			// apps to the list of the (pre-)registered apps.
 			fEarlyPreRegisteredApps.RemoveInfo(info);
-			info->team = team;
+			info->SetTeam(team);
 			info->thread = thread;
 			// create and transfer the port
 			info->port = port = create_port(B_REG_APP_LOOPER_PORT_CAPACITY,
@@ -733,6 +787,8 @@ TRoster::HandleGetAppList(BMessage* request)
 	if (request->FindString("signature", &signature) != B_OK)
 		signature = NULL;
 
+	team_id caller = request->ReturnAddress().Team();
+
 	// reply to the request
 	BMessage reply(B_REG_SUCCESS);
 	// get the list
@@ -740,6 +796,8 @@ TRoster::HandleGetAppList(BMessage* request)
 		 RosterAppInfo* info = *it;
 		 ++it) {
 		if (info->state != APP_STATE_REGISTERED)
+			continue;
+		if (!may_see(caller, info))
 			continue;
 		if (signature == NULL || strcasecmp(signature, info->signature) == 0)
 			reply.AddInt32("teams", info->team);
@@ -1511,7 +1569,7 @@ TRoster::_AppAdded(RosterAppInfo* info)
 	// notify the watchers
 	BMessage message(B_SOME_APP_LAUNCHED);
 	_AddMessageWatchingInfo(&message, info);
-	EventMaskWatcherFilter filter(B_REQUEST_LAUNCHED);
+	SessionWatcherFilter filter(B_REQUEST_LAUNCHED, info);
 	fWatchingService.NotifyWatchers(&message, &filter);
 }
 
@@ -1531,7 +1589,7 @@ TRoster::_AppRemoved(RosterAppInfo* info)
 		// notify the watchers
 		BMessage message(B_SOME_APP_QUIT);
 		_AddMessageWatchingInfo(&message, info);
-		EventMaskWatcherFilter filter(B_REQUEST_QUIT);
+		SessionWatcherFilter filter(B_REQUEST_QUIT, info);
 		fWatchingService.NotifyWatchers(&message, &filter);
 	}
 }
@@ -1556,7 +1614,7 @@ TRoster::_AppActivated(RosterAppInfo* info)
 		// notify the watchers
 		BMessage watcherMessage(B_SOME_APP_ACTIVATED);
 		_AddMessageWatchingInfo(&watcherMessage, info);
-		EventMaskWatcherFilter filter(B_REQUEST_ACTIVATED);
+		SessionWatcherFilter filter(B_REQUEST_ACTIVATED, info);
 		fWatchingService.NotifyWatchers(&watcherMessage, &filter);
 	}
 }

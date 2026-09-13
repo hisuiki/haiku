@@ -7,13 +7,16 @@
 #include "Utility.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <device/scsi.h>
 #include <DiskDevice.h>
 #include <DiskDeviceRoster.h>
+#include <FindDirectory.h>
 #include <fs_info.h>
+#include <Path.h>
 #include <Volume.h>
 
 
@@ -84,6 +87,30 @@ IsReadOnlyVolume(const char* path)
 }
 
 
+/*!	Whether the volume is on a drive meant to be carried from machine to
+	machine: one with removable media, or one attached over USB, which is where
+	a pen drive shows up whether or not it calls its media removable.
+*/
+bool
+IsRemovableVolume(const char* path)
+{
+	BVolume volume;
+	if (volume.SetTo(dev_for_path(path)) != B_OK)
+		return false;
+
+	BDiskDeviceRoster roster;
+	BDiskDevice diskDevice;
+	BPartition* partition;
+	if (roster.FindPartitionByVolume(volume, &diskDevice, &partition) != B_OK)
+		return false;
+
+	BPath devicePath;
+	return diskDevice.IsRemovableMedia()
+		|| (diskDevice.GetPath(&devicePath) == B_OK
+			&& strncmp(devicePath.Path(), "/dev/disk/usb/", 14) == 0);
+}
+
+
 status_t
 BlockMedia(const char* path, bool block)
 {
@@ -104,8 +131,15 @@ TranslatePath(const char* originalPath)
 {
 	BString path = originalPath;
 
-	// TODO: get actual home directory!
-	const char* home = "/boot/home";
+	// The home of the user whose jobs these are: a session daemon has HOME
+	// set from the account before it reads its jobs. Without it, this is the
+	// system daemon, running as uid 0.
+	BString home = getenv("HOME");
+	if (home.IsEmpty()) {
+		BPath homePath;
+		home = find_directory(B_USER_DIRECTORY, &homePath) == B_OK
+			? homePath.Path() : "/boot/home";
+	}
 	path.ReplaceAll("$HOME", home);
 	path.ReplaceAll("${HOME}", home);
 	if (path.StartsWith("~/"))

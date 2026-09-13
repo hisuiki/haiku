@@ -16,7 +16,11 @@ Application su : su.cpp : libmultiuser_utils.a libbsd.so ;
 
 Application passwd : passwd.cpp : libmultiuser_utils.a libbsd.so ;
 
-Application useradd : useradd.cpp ;
+Application launch_as : launch_as.cpp : libmultiuser_utils.a libbsd.so ;
+
+Application login_as : login_as.cpp : be ;
+
+Application useradd : useradd.cpp : libmultiuser_utils.a libbsd.so ;
 
 Application userdel : userdel.cpp ;
 

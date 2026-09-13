@@ -3,7 +3,8 @@
 # to inherit
 #
 
-export HOME=/boot/home
+: ${HOME:=/boot/home/user}
+export HOME
 
 BUILDHOME=/boot/system/develop
 

@@ -219,7 +219,7 @@ configure_bluetooth_debug() {
 				printf 'SEARCH on <vm>authorized_keys = %s ;\n' "$SSH_STAGING"
 				printf 'SEARCH on <vm>start_sshd.sh = %s ;\n' "$SSH_STAGING"
 				printf 'SEARCH on <vm>sshd = %s ;\n' "$SSH_STAGING"
-				printf 'AddFilesToHaikuImage home config settings ssh :'
+				printf 'AddFilesToHaikuImage home user config settings ssh :'
 				printf ' <vm>authorized_keys ;\n'
 				printf 'AddFilesToHaikuImage system non-packaged data launch :'
 				printf ' <vm>start_sshd.sh ;\n'
@@ -264,10 +264,9 @@ if [[ ! -s $ISO_PATH ]]; then
 	exit 1
 fi
 
-if ! lsusb -d "$USB_VENDOR:$USB_PRODUCT" >/dev/null 2>&1; then
-	printf 'TP-Link Bluetooth adapter %s:%s is not connected; VM was not restarted.\n' \
+if [[ -n ${USB_VENDOR:-} && -n ${USB_PRODUCT:-} ]] && ! lsusb -d "$USB_VENDOR:$USB_PRODUCT" >/dev/null 2>&1; then
+	printf 'USB adapter %s:%s is not connected; continuing since hostdev is optional.\n' \
 		"$USB_VENDOR" "$USB_PRODUCT" >&2
-	exit 1
 fi
 
 if ! virsh --connect "$LIBVIRT_URI" dominfo "$VM_NAME" >/dev/null 2>&1; then

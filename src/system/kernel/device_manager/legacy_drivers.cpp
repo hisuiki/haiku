@@ -263,6 +263,17 @@ static const directory_which kDriverPaths[] = {
 	B_SYSTEM_ADDONS_DIRECTORY
 };
 
+
+/*!	Whether the kernel may create the driver path at \a index, to watch it.
+	It only creates system directories: a home belongs to its user.
+*/
+static inline bool
+may_create_driver_path(uint32 index)
+{
+	return kDriverPaths[index] != B_USER_ADDONS_DIRECTORY
+		&& kDriverPaths[index] != B_USER_NONPACKAGED_ADDONS_DIRECTORY;
+}
+
 static DriverWatcher sDriverWatcher;
 static int32 sDriverEventsPending;
 static DriverEventList sDriverEvents;
@@ -947,7 +958,8 @@ DirectoryIterator::SetTo(const char* path, const char* subPath, bool recursive)
 			if (i < 3 && disableUserAddOns)
 				continue;
 
-			if (__find_directory(kDriverPaths[i], gBootDevice, true,
+			if (__find_directory(kDriverPaths[i], gBootDevice,
+				may_create_driver_path(i),
 					pathBuffer.LockBuffer(), pathBuffer.BufferSize()) == B_OK) {
 				pathBuffer.UnlockBuffer();
 				pathBuffer.Append("kernel");
@@ -1499,7 +1511,8 @@ legacy_driver_probe(const char* subPath)
 			if (i < 3 && disableUserAddOns)
 				continue;
 
-			if (__find_directory(kDriverPaths[i], gBootDevice, true,
+			if (__find_directory(kDriverPaths[i], gBootDevice,
+				may_create_driver_path(i),
 					path.LockBuffer(), path.BufferSize()) == B_OK) {
 				path.UnlockBuffer();
 				path.Append("kernel/drivers");

@@ -50,6 +50,7 @@ init_common(int device, bool isClone)
 	gInfo->is_clone = isClone;
 	gInfo->device = device;
 	gInfo->current_mode = UINT16_MAX;
+	gInfo->frame_buffer_area = -1;
 
 	// get basic info from driver
 
@@ -70,10 +71,32 @@ init_common(int device, bool isClone)
 }
 
 
+/*!	Asks the driver to clone the framebuffer into our address space. This keeps
+	the framebuffer out of the shared info area, which is visible to every app.
+*/
+static status_t
+map_frame_buffer(void)
+{
+	area_info info;
+	status_t status = ioctl(gInfo->device, VIRTIO_GPU_CLONE_FRAME_BUFFER, &info,
+		sizeof(info));
+	if (status != B_OK)
+		return status;
+
+	gInfo->frame_buffer_area = info.area;
+	gInfo->frame_buffer = info.address;
+	return B_OK;
+}
+
+
 /*!	Cleans up everything done by a successful init_common(). */
 static void
 uninit_common(void)
 {
+	delete_area(gInfo->frame_buffer_area);
+	gInfo->frame_buffer_area = -1;
+	gInfo->frame_buffer = NULL;
+
 	delete_area(gInfo->shared_info_area);
 	gInfo->shared_info_area = -1;
 	gInfo->shared_info = NULL;
@@ -101,6 +124,12 @@ virtio_gpu_init_accelerant(int device)
 		return status;
 
 	status = create_mode_list();
+	if (status != B_OK) {
+		uninit_common();
+		return status;
+	}
+
+	status = map_frame_buffer();
 	if (status != B_OK) {
 		uninit_common();
 		return status;
@@ -148,6 +177,10 @@ virtio_gpu_clone_accelerant(void *info)
 		"virtio_gpu cloned modes", (void **)&gInfo->mode_list,
 		B_ANY_ADDRESS, B_READ_AREA, gInfo->shared_info->mode_list_area);
 	if (status < B_OK)
+		goto err2;
+
+	status = map_frame_buffer();
+	if (status != B_OK)
 		goto err2;
 
 	return B_OK;

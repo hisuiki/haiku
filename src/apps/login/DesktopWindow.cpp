@@ -23,15 +23,14 @@
 #define B_TRANSLATION_CONTEXT "Desktop Window"
 
 
-DesktopWindow::DesktopWindow(BRect frame, bool editMode)
+DesktopWindow::DesktopWindow(BRect frame)
 	: BWindow(frame, B_TRANSLATE("Desktop"),
 		kDesktopWindowLook,
 		kDesktopWindowFeel,
 		B_NOT_MOVABLE | B_NOT_CLOSABLE | B_NOT_ZOOMABLE
 		 | B_NOT_MINIMIZABLE | B_NOT_RESIZABLE
 		 | B_ASYNCHRONOUS_CONTROLS,
-		editMode?B_CURRENT_WORKSPACE:B_ALL_WORKSPACES),
-	  fEditShelfMode(editMode)
+		B_ALL_WORKSPACES)
 {
 	BScreen screen;
 	BView *desktop = new BView(Bounds(), "desktop", B_FOLLOW_NONE, 0);
@@ -55,7 +54,9 @@ DesktopWindow::DesktopWindow(BRect frame, bool editMode)
 		get_ref_for_path(path.Path(), &ref);
 	}
 
-	fDesktopShelf = new BShelf(&ref, desktop, fEditShelfMode, "DesktopShelf");
+	// The desktop behind the login window is not editable: what it shows will
+	// be set in a preferences panel of its own.
+	fDesktopShelf = new BShelf(&ref, desktop, false, "DesktopShelf");
 	if (fDesktopShelf)
 		fDesktopShelf->SetDisplaysZombies(true);
 }
@@ -91,8 +92,7 @@ DesktopWindow::DispatchMessage(BMessage *message, BHandler *handler)
 		case B_UNMAPPED_KEY_DOWN:
 		case B_UNMAPPED_KEY_UP:
 			/* don't allow interacting with the replicants */
-			if (!fEditShelfMode)
-				break;
+			break;
 		default:
 		BWindow::DispatchMessage(message, handler);
 	}

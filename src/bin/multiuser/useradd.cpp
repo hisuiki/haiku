@@ -5,11 +5,13 @@
 
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <pwd.h>
 #include <shadow.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -63,7 +65,8 @@ print_usage_and_exit(bool error)
 int
 main(int argc, const char* const* argv)
 {
-	const char* home = "/boot/home";
+	const char* home = NULL;
+	char defaultHome[PATH_MAX];
 	int expiration = 99999;
 	int inactive = -1;
 	const char* group = NULL;
@@ -128,6 +131,15 @@ main(int argc, const char* const* argv)
 		print_usage_and_exit(true);
 
 	const char* user = argv[optind];
+	bool createDefaultHome = home == NULL;
+	if (home == NULL) {
+		if (snprintf(defaultHome, sizeof(defaultHome), "/boot/home/%s", user)
+				>= (int)sizeof(defaultHome)) {
+			fprintf(stderr, "Error: User name is too long.\n");
+			exit(1);
+		}
+		home = defaultHome;
+	}
 
 	if (geteuid() != 0) {
 		fprintf(stderr, "Error: Only root may add users.\n");
@@ -224,6 +236,15 @@ main(int argc, const char* const* argv)
 	if (error != B_OK) {
 		fprintf(stderr, "Error: Failed to create user: %s\n", strerror(error));
 		exit(1);
+	}
+
+	if (createDefaultHome) {
+		error = create_user_home(home, uid, gid);
+		if (error != B_OK) {
+			fprintf(stderr, "Error: Failed to create home directory \"%s\": %s\n",
+				home, strerror(error));
+			exit(1);
+		}
 	}
 
 	return 0;

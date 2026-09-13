@@ -58,6 +58,113 @@ BLaunchRoster::Private::RegisterSessionDaemon(const BMessenger& daemon)
 }
 
 
+status_t
+BLaunchRoster::Private::StartLoginSession()
+{
+	BMessage request(B_LAUNCH_LOGIN_SESSION);
+	status_t status = request.AddInt32("user", getuid());
+	if (status != B_OK)
+		return status;
+
+	return fRoster->_SendRequest(request);
+}
+
+
+status_t
+BLaunchRoster::Private::SwitchSession(const char* login, const char* password)
+{
+	if (login == NULL || password == NULL)
+		return B_BAD_VALUE;
+
+	BMessage request(B_SWITCH_SESSION);
+	status_t status = request.AddInt32("user", getuid());
+	if (status == B_OK)
+		status = request.AddString("login", login);
+	if (status == B_OK)
+		status = request.AddString("password", password);
+	if (status != B_OK)
+		return status;
+
+	return fRoster->_SendRequest(request);
+}
+
+
+status_t
+BLaunchRoster::Private::LogoutSession()
+{
+	BMessage request(B_LOGOUT_SESSION);
+	status_t status = request.AddInt32("user", getuid());
+	if (status != B_OK)
+		return status;
+
+	return fRoster->_SendRequest(request);
+}
+
+
+/*!	Leaves this session running and puts the login screen in front of it, so
+	that whoever comes back has to say who they are. Coming back to a session
+	that is still running is a matter of logging into it again.
+*/
+/*!	Runs \a program as the user of the session that has the display, for
+	system services that act on behalf of whoever is in front of the screen.
+	Only the superuser may ask for this; the program is not run as the
+	superuser.
+*/
+status_t
+BLaunchRoster::Private::LaunchInDisplaySession(const char* program)
+{
+	if (program == NULL)
+		return B_BAD_VALUE;
+
+	BMessage request(B_LAUNCH_IN_DISPLAY_SESSION);
+	status_t status = request.AddInt32("user", getuid());
+	if (status == B_OK)
+		status = request.AddString("program", program);
+	if (status != B_OK)
+		return status;
+
+	return fRoster->_SendRequest(request);
+}
+
+
+/*!	Tells which user has the display: what a system service needs to know to
+	act for whoever is at the screen, or to stay out of the way while the
+	login screen is in front. Only the superuser may ask.
+*/
+status_t
+BLaunchRoster::Private::GetDisplaySessionUser(uid_t& _user)
+{
+	BMessage request(B_GET_DISPLAY_SESSION);
+	status_t status = request.AddInt32("user", getuid());
+	if (status != B_OK)
+		return status;
+
+	BMessage reply;
+	status = fRoster->_SendRequest(request, reply);
+	if (status != B_OK)
+		return status;
+
+	int32 user;
+	status = reply.FindInt32("display user", &user);
+	if (status == B_OK)
+		_user = (uid_t)user;
+
+	return status;
+}
+
+
+status_t
+BLaunchRoster::Private::LockSession()
+{
+	BMessage request(B_LOCK_SESSION);
+	status_t status = request.AddInt32("user", getuid());
+	if (status != B_OK)
+		return status;
+
+	return fRoster->_SendRequest(request);
+}
+
+
 // #pragma mark -
 
 

@@ -2,32 +2,35 @@
 # all the other definitions.
 
 # create directories that may remain empty
-AddDirectoryToHaikuImage home : home.rdef ;
-AddDirectoryToHaikuImage home Desktop : home-desktop.rdef ;
-AddDirectoryToHaikuImage home mail ;
-AddDirectoryToHaikuImage home config : home-config.rdef ;
-AddDirectoryToHaikuImage home config cache ;
-AddDirectoryToHaikuImage home config packages ;
-AddDirectoryToHaikuImage home config settings ;
-AddDirectoryToHaikuImage home config var ;
-AddDirectoryToHaikuImage home config non-packaged bin ;
-AddDirectoryToHaikuImage home config non-packaged data fonts ;
-AddDirectoryToHaikuImage home config non-packaged lib ;
-AddDirectoryToHaikuImage home config non-packaged add-ons control_look ;
-AddDirectoryToHaikuImage home config non-packaged add-ons decorators ;
-AddDirectoryToHaikuImage home config non-packaged add-ons opengl ;
-AddDirectoryToHaikuImage home config non-packaged add-ons kernel drivers bin ;
-AddDirectoryToHaikuImage home config non-packaged add-ons kernel drivers dev ;
-AddDirectoryToHaikuImage home config non-packaged add-ons input_server devices ;
-AddDirectoryToHaikuImage home config non-packaged add-ons input_server filters ;
-AddDirectoryToHaikuImage home config non-packaged add-ons input_server methods ;
-AddDirectoryToHaikuImage home config non-packaged add-ons media plugins ;
-AddDirectoryToHaikuImage home config non-packaged add-ons Tracker ;
-AddDirectoryToHaikuImage home config non-packaged add-ons Print ;
-AddDirectoryToHaikuImage home config non-packaged add-ons Screen\ Savers ;
-AddDirectoryToHaikuImage home config non-packaged add-ons Translators ;
+AddDirectoryToHaikuImage home ;
+AddDirectoryToHaikuImage home user : home.rdef ;
+AddDirectoryToHaikuImage home user Desktop : home-desktop.rdef ;
+AddDirectoryToHaikuImage home user mail ;
+AddDirectoryToHaikuImage home user config : home-config.rdef ;
+AddDirectoryToHaikuImage home user config cache ;
+AddDirectoryToHaikuImage home user config packages ;
+AddDirectoryToHaikuImage home user config settings ;
+AddDirectoryToHaikuImage home user config var ;
+AddDirectoryToHaikuImage home user config non-packaged bin ;
+AddDirectoryToHaikuImage home user config non-packaged data fonts ;
+AddDirectoryToHaikuImage home user config non-packaged lib ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons control_look ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons decorators ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons opengl ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons kernel drivers bin ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons kernel drivers dev ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons input_server devices ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons input_server filters ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons input_server methods ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons media plugins ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons Tracker ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons Print ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons Screen\ Savers ;
+AddDirectoryToHaikuImage home user config non-packaged add-ons Translators ;
 AddDirectoryToHaikuImage system : system.rdef ;
 AddDirectoryToHaikuImage system cache tmp ;
+AddDirectoryToHaikuImage system cache login ;
+AddDirectoryToHaikuImage system cache root ;
 AddDirectoryToHaikuImage system non-packaged bin ;
 AddDirectoryToHaikuImage system non-packaged data fonts ;
 AddDirectoryToHaikuImage system non-packaged lib ;
@@ -58,10 +61,19 @@ include [ FDirName $(HAIKU_BUILD_RULES_DIR) OptionalPackages ] ;
 #pragma mark - User/Group Setup
 
 
-# add the root user and the root and users groups
-AddUserToHaikuImage $(HAIKU_ROOT_USER_NAME:E=baron) : 0 : 0 : /boot/home
-	: /bin/bash : $(HAIKU_ROOT_USER_REAL_NAME:E="Root User") ;
+# add the administrator, default user, service users, and their groups
+AddUserToHaikuImage root : 0 : 0 : /boot/system/cache/root
+	: /bin/bash : "System Administrator" ;
+AddUserToHaikuImage $(HAIKU_DEFAULT_USER_NAME:E=$(HAIKU_ROOT_USER_NAME:E=user))
+	: 1000 : 100 : /boot/home/user : /bin/bash
+	: $(HAIKU_DEFAULT_USER_REAL_NAME:E=$(HAIKU_ROOT_USER_REAL_NAME:E="Yourself")) ;
+AddUserToHaikuImage _login : 2 : 2 : /boot/system/cache/login : /bin/false
+	: "Login Service" ;
+AddUserToHaikuImage _media : 3 : 3 : /boot/system/cache/media : /bin/false
+	: "Media Service" ;
 AddGroupToHaikuImage root : 0 : ;
+AddGroupToHaikuImage _login : 2 : ;
+AddGroupToHaikuImage _media : 3 : ;
 AddGroupToHaikuImage users : 100 : ;
 
 

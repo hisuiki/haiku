@@ -58,6 +58,8 @@ All rights reserved.
 #include <Roster.h>
 
 #include <DeskbarPrivate.h>
+#include <LaunchRoster.h>
+#include <LaunchRosterPrivate.h>
 #include <RosterPrivate.h>
 #include "tracker_private.h"
 
@@ -690,6 +692,28 @@ TBarApp::MessageReceived(BMessage* message)
 		case kSuspendSystem:
 			// TODO: Call BRoster?
 			break;
+
+		case kLogOutUser:
+		{
+			BLaunchRoster roster;
+			status_t error
+				= BLaunchRoster::Private(roster).LogoutSession();
+			if (error != B_OK)
+				fprintf(stderr, "Log out failed: %s\n", strerror(error));
+
+			break;
+		}
+
+		case kLockSession:
+		{
+			// The session carries on running behind the login screen.
+			BLaunchRoster roster;
+			status_t error = BLaunchRoster::Private(roster).LockSession();
+			if (error != B_OK)
+				fprintf(stderr, "Lock screen failed: %s\n", strerror(error));
+
+			break;
+		}
 
 		case kRebootSystem:
 		case kShutdownSystem:

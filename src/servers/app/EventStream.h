@@ -25,6 +25,10 @@ class EventStream {
 		virtual bool IsValid() = 0;
 		virtual void SendQuit() = 0;
 
+		// Readies a stream that was stopped to be used again, by the desktop
+		// that takes the screen next.
+		virtual void Restart() {}
+
 		virtual bool SupportsCursorThread() const;
 
 		virtual void UpdateScreenBounds(BRect bounds) = 0;
@@ -50,6 +54,7 @@ class InputServerStream : public EventStream {
 
 		virtual bool IsValid();
 		virtual void SendQuit();
+		virtual void Restart();
 
 		virtual bool SupportsCursorThread() const { return fCursorSemaphore >= B_OK; }
 
@@ -71,6 +76,7 @@ class InputServerStream : public EventStream {
 		BMessageQueue fEvents;
 		port_id	fPort;
 		bool	fQuitting;
+		bool	fStopped;
 		sem_id	fCursorSemaphore;
 		area_id	fCursorArea;
 		shared_cursor* fCursorBuffer;

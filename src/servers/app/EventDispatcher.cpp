@@ -237,6 +237,7 @@ EventDispatcher::EventDispatcher()
 	fStream(NULL),
 	fThread(-1),
 	fCursorThread(-1),
+	fIsStopping(false),
 	fPreviousMouseTarget(NULL),
 	fFocus(NULL),
 	fSuspendFocus(false),
@@ -294,16 +295,20 @@ EventDispatcher::_Unset()
 	if (fStream == NULL)
 		return;
 
+	fIsStopping = true;
 	fStream->SendQuit();
 
 	status_t status;
-	wait_for_thread(fThread, &status);
-	wait_for_thread(fCursorThread, &status);
+	if (fThread >= B_OK && fThread != find_thread(NULL))
+		wait_for_thread(fThread, &status);
+	if (fCursorThread >= B_OK && fCursorThread != find_thread(NULL))
+		wait_for_thread(fCursorThread, &status);
 
 	fThread = fCursorThread = -1;
 
 	gInputManager->PutStream(fStream);
 	fStream = NULL;
+	fIsStopping = false;
 }
 
 
@@ -975,6 +980,11 @@ EventDispatcher::_EventLoop()
 		if (fNextLatestMouseMoved == event)
 			fNextLatestMouseMoved = NULL;
 		delete event;
+	}
+
+	if (fIsStopping) {
+		fThread = -1;
+		return;
 	}
 
 	// The loop quit, therefore no more events are coming from the input

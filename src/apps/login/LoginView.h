@@ -18,7 +18,6 @@ const uint32 kUserInvoked = 'uinv';
 const uint32 kLoginEdited = 'logc';
 const uint32 kPasswordEdited = 'pasc';
 const uint32 kHidePassword = 'hidp';
-const uint32 kAddNextUser = 'adnu';
 const uint32 kSetProgress = 'setp';
 
 class LoginView : public BView {
@@ -30,7 +29,7 @@ public:
 	void		Pulse();
 
 private:
-	void		AddNextUser();
+	void		AddUsers();
 	void		EnableControls(bool enable);
 
 	BListView*		fUserList;

@@ -153,7 +153,7 @@ virtio_gpu_get_frame_buffer_config(frame_buffer_config* config)
 {
 	TRACE(("virtio_gpu_get_frame_buffer_config()\n"));
 
-	config->frame_buffer = gInfo->shared_info->frame_buffer;
+	config->frame_buffer = gInfo->frame_buffer;
 	TRACE(("virtio_gpu_get_frame_buffer_config() = %" B_PRIxADDR "\n",
 		config->frame_buffer));
 	//config->frame_buffer_dma = gInfo->shared_info->physical_frame_buffer;

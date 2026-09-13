@@ -4,18 +4,18 @@
 include [ FDirName $(HAIKU_BUILD_RULES_DIR) images definitions minimum ] ;
 
 # build and add the source package directory and a haikuports.config file
-CopyDirectoryToHaikuImage home haikuports
+CopyDirectoryToHaikuImage home user haikuports
 	: [ BuildHaikuPortsSourcePackageDirectory ]
 	: input-source-packages : -x  *_source-*.hpkg : isTarget ;
-AddFilesToHaikuImage home haikuports
+AddFilesToHaikuImage home user haikuports
 	: [ BuildHaikuPortsRepositoryConfig /boot/home/haikuports ] ;
 
 # copy the haikuports format versions file
 local formatVersionsFile = <haikuports>FormatVersions ;
 SEARCH on $(formatVersionsFile) = $(HAIKU_PORTS) ;
-AddFilesToHaikuImage home haikuports : $(formatVersionsFile) ;
+AddFilesToHaikuImage home user haikuports : $(formatVersionsFile) ;
 
 # bootstrap daemon
 local bootstrapDaemon = <haiku-image>bootstrap_daemon.py ;
 SEARCH on $(bootstrapDaemon) = [ FDirName $(HAIKU_TOP) build scripts ] ;
-AddFilesToHaikuImage home config settings boot launch : $(bootstrapDaemon) ;
+AddFilesToHaikuImage home user config settings boot launch : $(bootstrapDaemon) ;

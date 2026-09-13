@@ -1,7 +1,6 @@
 SubDir HAIKU_TOP src apps login ;
 
 UsePrivateHeaders app interface ;
-UseHeaders [ FDirName $(HAIKU_TOP) src bin multiuser ] ;
 
 Application Login :
 	DesktopWindow.cpp
@@ -9,7 +8,7 @@ Application Login :
 	LoginWindow.cpp
 	LoginView.cpp
 	main.cpp
-	: be tracker bsd libmultiuser_utils.a [ TargetLibstdc++ ] localestub
+	: be tracker [ TargetLibstdc++ ] localestub
 	: Login.rdef
 ;
 

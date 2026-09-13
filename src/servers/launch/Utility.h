@@ -12,6 +12,7 @@
 namespace Utility {
 	bool IsReadOnlyVolume(dev_t device);
 	bool IsReadOnlyVolume(const char* path);
+	bool IsRemovableVolume(const char* path);
 
 	status_t BlockMedia(const char* path, bool block);
 	status_t EjectMedia(const char* path);

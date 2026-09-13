@@ -23,5 +23,8 @@ status_t authenticate_user(const char* prompt, passwd* passwd, spwd* spwd,
 status_t setup_environment(struct passwd* passwd, bool preserveEnvironment,
 			bool chngdir = true);
 
+status_t create_user_home(const char* home, uid_t uid, gid_t gid,
+			bool fromTemplate = true);
+
 
 #endif	// MULTIUSER_UTILS_H

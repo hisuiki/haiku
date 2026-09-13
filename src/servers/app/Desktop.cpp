@@ -47,9 +47,12 @@
 #include "ClickTarget.h"
 #include "DecorManager.h"
 #include "DesktopSettingsPrivate.h"
+#include "BitmapHWInterface.h"
+#include "BitmapManager.h"
 #include "DrawingEngine.h"
 #include "GlobalFontManager.h"
 #include "HWInterface.h"
+#include "RenderingBuffer.h"
 #include "InputManager.h"
 #include "Screen.h"
 #include "ScreenManager.h"
@@ -427,6 +430,8 @@ Desktop::Desktop(uid_t userID, const char* targetScreen)
 	fDirectScreenLock("direct screen lock"),
 	fDirectScreenTeam(-1),
 	fCurrentWorkspace(0),
+	fScreenSuspended(false),
+	fSessionID(0),
 	fPreviousWorkspace(0),
 	fAllWindows(kAllWindowList),
 	fSubsetWindows(kSubsetList),
@@ -486,6 +491,64 @@ Desktop::RegisterListener(DesktopListener* listener)
 
 /*!	This method is allowed to throw exceptions.
 */
+/*!	Shown while a desktop takes over the screen, before it has drawn
+	anything of its own.
+*/
+static const rgb_color kSwitchBackgroundColor = { 96, 96, 96, 255 };
+
+
+/*!	Paints the whole screen in one colour, without the drawing engine, which
+	is of no use until the desktop is running. Only the 32 bit modes every
+	current driver uses are handled; anything else keeps what it had.
+*/
+void
+Desktop::_FillScreen(const rgb_color& color)
+{
+	::HWInterface* hwInterface = fVirtualScreen.HWInterface();
+	if (hwInterface == NULL || !hwInterface->LockExclusiveAccess())
+		return;
+
+	// Both buffers: what is shown is the front one, but the back one is what
+	// everything drawn from now on starts from, and it begins as black.
+	RenderingBuffer* buffers[] = {
+		hwInterface->BackBuffer(), hwInterface->FrontBuffer()
+	};
+	BRect frame(0, 0, -1, -1);
+
+	for (size_t i = 0; i < sizeof(buffers) / sizeof(buffers[0]); i++) {
+		RenderingBuffer* buffer = buffers[i];
+		if (buffer == NULL || buffer->Bits() == NULL)
+			continue;
+
+		color_space format = buffer->ColorSpace();
+		if (format != B_RGB32 && format != B_RGBA32 && format != B_RGB32_BIG
+			&& format != B_RGBA32_BIG) {
+			continue;
+		}
+
+		uint32 pixel = format == B_RGB32 || format == B_RGBA32
+			? ((uint32)color.alpha << 24) | ((uint32)color.red << 16)
+				| ((uint32)color.green << 8) | color.blue
+			: ((uint32)color.blue << 24) | ((uint32)color.green << 16)
+				| ((uint32)color.red << 8) | color.alpha;
+
+		uint8* row = (uint8*)buffer->Bits();
+		for (uint32 y = 0; y < buffer->Height(); y++) {
+			uint32* pixels = (uint32*)row;
+			for (uint32 x = 0; x < buffer->Width(); x++)
+				pixels[x] = pixel;
+			row += buffer->BytesPerRow();
+		}
+
+		frame = BRect(0, 0, buffer->Width() - 1, buffer->Height() - 1);
+	}
+
+	if (frame.IsValid())
+		hwInterface->Invalidate(frame);
+	hwInterface->UnlockExclusiveAccess();
+}
+
+
 status_t
 Desktop::Init()
 {
@@ -526,6 +589,14 @@ Desktop::Init()
 	}
 
 	HWInterface()->SetDPMSMode(B_DPMS_ON);
+
+	// Whatever is on the screen belongs to what came before this desktop: the
+	// boot splash, or the session that has just ended. Cover it with a plain
+	// backdrop straight away, so that starting up or switching sessions does
+	// not leave a stale picture standing until the workspace is drawn. This
+	// writes to the frame buffer directly: at this point the screen is set up,
+	// but nothing that draws on it is.
+	_FillScreen(kSwitchBackgroundColor);
 
 	// Restore brightness
 	{
@@ -585,16 +656,10 @@ Desktop::Init()
 	gInputManager->AddStream(new InputServerStream);
 #endif
 
-	EventStream* stream = fVirtualScreen.HWInterface()->CreateEventStream();
-	if (stream == NULL)
-		stream = gInputManager->GetStream();
-
 	fEventDispatcher.SetDesktop(this);
-	fEventDispatcher.SetTo(stream);
+	TakeInput();
 	if (fEventDispatcher.InitCheck() != B_OK)
 		_LaunchInputServer();
-
-	fEventDispatcher.SetHWInterface(fVirtualScreen.HWInterface());
 
 	fEventDispatcher.SetMouseFilter(new MouseFilter(this));
 	fEventDispatcher.SetKeyboardFilter(new KeyboardFilter(this));
@@ -3621,6 +3686,184 @@ Desktop::_ResumeDirectFrameBufferAccess()
 				B_DIRECT_START | B_BUFFER_RESET, B_MODE_CHANGED);
 		}
 	}
+}
+
+
+/*!	Takes the display: sets the mode this desktop wants, paints the backdrop
+	over whatever the previous owner left, and starts listening to the input
+	devices. Used both when a desktop starts and when it is given the display
+	back.
+*/
+status_t
+Desktop::_TakeScreen()
+{
+	status_t status = fVirtualScreen.SetConfiguration(*this,
+		fWorkspaces[fCurrentWorkspace].StoredScreenConfiguration(),
+		fWorkspaces[fCurrentWorkspace].CurrentScreenConfiguration());
+	if (status != B_OK)
+		return status;
+	if (fVirtualScreen.HWInterface() == NULL)
+		return B_ERROR;
+
+	HWInterface()->SetDPMSMode(B_DPMS_ON);
+	_FillScreen(kSwitchBackgroundColor);
+
+	return B_OK;
+}
+
+
+/*!	Starts listening to the input devices again, once this desktop has the
+	display. Like giving them up, this is done without holding the locks of the
+	desktop, which the event thread needs.
+*/
+void
+Desktop::TakeInput()
+{
+	if (fEventDispatcher.InitCheck() == B_OK)
+		return;
+
+	EventStream* stream = fVirtualScreen.HWInterface()->CreateEventStream();
+	if (stream == NULL)
+		stream = gInputManager->GetStream();
+
+	fEventDispatcher.SetTo(stream);
+	fEventDispatcher.SetHWInterface(fVirtualScreen.HWInterface());
+}
+
+
+/*!	Points the drawing engine of every window at \a interface, so that what the
+	windows draw follows the desktop between the display and memory.
+*/
+void
+Desktop::_SetWindowsHWInterface(::HWInterface* interface)
+{
+	for (Window* window = fAllWindows.FirstWindow(); window != NULL;
+			window = window->NextWindow(kAllWindowList)) {
+		::DrawingEngine* engine = window->GetDrawingEngine();
+		if (engine != NULL)
+			engine->SetHWInterface(interface);
+	}
+}
+
+
+/*!	Gives up the display, so that the desktop of another session can have it.
+	Everything this desktop holds stays as it is - its windows, and the
+	applications that own them, carry on - but what they draw goes to memory
+	until the desktop is given the display back.
+*/
+status_t
+Desktop::SuspendScreen()
+{
+	if (fScreenSuspended)
+		return B_OK;
+
+	// The input devices go first, and before this takes any lock of the
+	// desktop: letting go of the event stream waits for the thread that
+	// delivers events, and that thread takes those same locks to deliver what
+	// it already has.
+	fEventDispatcher.SetTo(NULL);
+	fEventDispatcher.SetHWInterface(NULL);
+
+	AutoWriteLocker windowLocker(fWindowLock);
+	AutoWriteLocker screenLocker(fScreenLock);
+
+	::HWInterface* hwInterface = fVirtualScreen.HWInterface();
+	if (hwInterface == NULL)
+		return B_ERROR;
+
+	BRect frame = fVirtualScreen.Frame();
+	Screen* screen = fVirtualScreen.ScreenAt(0);
+
+	BReference<ServerBitmap> bitmap(gBitmapManager->CreateBitmap(NULL,
+		*hwInterface, frame, B_RGBA32, 0), true);
+	if (!bitmap.IsSet())
+		return B_NO_MEMORY;
+
+	BitmapHWInterface* offscreenInterface
+		= new(std::nothrow) BitmapHWInterface(bitmap);
+	if (offscreenInterface == NULL)
+		return B_NO_MEMORY;
+
+	ObjectDeleter<Screen> offscreen(new(std::nothrow) Screen(offscreenInterface,
+		screen != NULL ? screen->ID() : B_MAIN_SCREEN_ID.id));
+	if (!offscreen.IsSet()) {
+		delete offscreenInterface;
+		return B_NO_MEMORY;
+	}
+
+	status_t status = offscreen->Initialize();
+	if (status != B_OK)
+		return status;
+
+	hwInterface->SetCursorVisible(false);
+
+	status = fVirtualScreen.SetOffscreen(offscreen.Get());
+	if (status != B_OK)
+		return status;
+
+	fOffscreenBitmap.SetTo(bitmap.Get());
+	fOffscreenScreen.SetTo(offscreen.Detach());
+	fScreenSuspended = true;
+
+	// Every window draws through an engine of its own, bound to the interface
+	// the desktop had when the window was made. Those have to follow the
+	// desktop off the screen, or what they draw from now on - a clock ticking
+	// in the login screen, say - would appear over the seat in front.
+	_SetWindowsHWInterface(fVirtualScreen.HWInterface());
+
+	return B_OK;
+}
+
+
+/*!	Gives the desktop the display back, and redraws all of it.
+*/
+status_t
+Desktop::ResumeScreen()
+{
+	if (!fScreenSuspended)
+		return B_OK;
+
+	{
+		AutoWriteLocker windowLocker(fWindowLock);
+		AutoWriteLocker screenLocker(fScreenLock);
+
+		status_t status = _TakeScreen();
+		if (status != B_OK) {
+			debug_printf("app_server: desktop of user %" B_PRId32 " could not "
+				"take the screen: %s\n", fUserID, strerror(status));
+			return status;
+		}
+
+		fScreenSuspended = false;
+
+		// The windows draw to the display again, before what they were drawing
+		// to goes away.
+		_SetWindowsHWInterface(fVirtualScreen.HWInterface());
+
+		fOffscreenScreen.Unset();
+		fOffscreenBitmap.Unset();
+
+		HWInterface()->SetCursorVisible(true);
+
+		Screen* screen = fVirtualScreen.ScreenAt(0);
+		if (screen != NULL)
+			_ScreenChanged(screen);
+	}
+
+	TakeInput();
+
+	return B_OK;
+}
+
+
+/*!	The screen manager asks this when another desktop wants the display. It is
+	handed over only once this desktop has been suspended, which is what the
+	switch between sessions does before it lets the next desktop take over.
+*/
+bool
+Desktop::ReleaseScreen(Screen* screen)
+{
+	return fScreenSuspended;
 }
 
 

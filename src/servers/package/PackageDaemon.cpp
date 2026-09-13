@@ -10,12 +10,16 @@
 #include "PackageDaemon.h"
 
 #include <errno.h>
+#include <pwd.h>
 #include <string.h>
 
 #include <Directory.h>
 #include <NodeMonitor.h>
+#include <OS.h>
+#include <Path.h>
 
 #include <AutoDeleter.h>
+#include <package/CommitTransactionResult.h>
 #include <package/DaemonDefs.h>
 
 #include "DebugSupport.h"
@@ -24,6 +28,44 @@
 
 
 using namespace BPackageKit::BPrivate;
+
+
+static bool
+caller_can_commit(BMessage* message, Root* root,
+	BPackageInstallationLocation location)
+{
+	team_info callerInfo;
+	team_id callerTeam = message->ReturnAddress().Team();
+	if (callerTeam < 0 || get_team_info(callerTeam, &callerInfo) != B_OK)
+		return false;
+
+	if (location == B_PACKAGE_INSTALLATION_LOCATION_SYSTEM)
+		return callerInfo.uid == 0;
+	if (location != B_PACKAGE_INSTALLATION_LOCATION_HOME)
+		return false;
+
+	Volume* volume = root->GetVolume(location);
+	struct passwd* passwd = getpwuid(callerInfo.uid);
+	if (volume == NULL || passwd == NULL || passwd->pw_dir == NULL)
+		return false;
+
+	BPath packagesPath(passwd->pw_dir, "config/packages");
+	BDirectory packagesDirectory(packagesPath.Path());
+	node_ref packagesRef;
+	return packagesDirectory.GetNodeRef(&packagesRef) == B_OK
+		&& packagesRef == volume->PackagesDirectoryRef();
+}
+
+
+static void
+send_commit_denied(BMessage* message)
+{
+	BMessage reply(B_MESSAGE_COMMIT_TRANSACTION_REPLY);
+	BCommitTransactionResult result(B_TRANSACTION_BAD_REQUEST);
+	result.SetSystemError(B_PERMISSION_DENIED);
+	if (result.AddToMessage(reply) == B_OK)
+		message->SendReply(&reply);
+}
 
 
 PackageDaemon::PackageDaemon(status_t* _error)
@@ -94,15 +136,23 @@ PackageDaemon::MessageReceived(BMessage* message)
 			if (error == B_OK)
 				error = message->FindInt64("root", &nodeRef.node);
 
+			Root* root = NULL;
 			if (fSystemRoot != NULL && (error != B_OK
 					|| fSystemRoot->NodeRef() == nodeRef)) {
-				fSystemRoot->HandleRequest(DetachCurrentMessage());
-			} else if (error == B_OK) {
-				Root* root = _FindRoot(nodeRef);
-				if (root != NULL) {
-					root->HandleRequest(DetachCurrentMessage());
-				}
+				root = fSystemRoot;
+			} else if (error == B_OK)
+				root = _FindRoot(nodeRef);
+
+			int32 location;
+			if (root != NULL && message->what == B_MESSAGE_COMMIT_TRANSACTION
+				&& (message->FindInt32("location", &location) != B_OK
+					|| !caller_can_commit(message, root,
+						(BPackageInstallationLocation)location))) {
+				send_commit_denied(message);
+				break;
 			}
+			if (root != NULL)
+				root->HandleRequest(DetachCurrentMessage());
 			break;
 		}
 

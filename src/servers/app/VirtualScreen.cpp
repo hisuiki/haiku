@@ -109,6 +109,48 @@ VirtualScreen::SetConfiguration(Desktop& desktop, const ScreenConfigurations& co
 }
 
 
+/*!	Hands back whatever screens this desktop had, for another one to take.
+*/
+void
+VirtualScreen::Release()
+{
+	_Reset();
+}
+
+
+/*!	Puts the desktop on a screen that is not the display: what it draws from
+	now on goes to memory, and the screens it held are handed back. The screen
+	passed in belongs to the caller, which must keep it until the desktop is
+	given a display again.
+*/
+status_t
+VirtualScreen::SetOffscreen(Screen* screen)
+{
+	if (screen == NULL)
+		return B_BAD_VALUE;
+
+	_Reset();
+
+	screen_item* item = new(std::nothrow) screen_item;
+	if (item == NULL)
+		return B_NO_MEMORY;
+
+	item->screen = screen;
+	item->frame = screen->Frame();
+
+	if (!fScreenList.AddItem(item)) {
+		delete item;
+		return B_NO_MEMORY;
+	}
+
+	fDrawingEngine = screen->GetDrawingEngine();
+	fHWInterface = screen->HWInterface();
+	UpdateFrame();
+
+	return B_OK;
+}
+
+
 status_t
 VirtualScreen::AddScreen(Screen* screen, const ScreenConfigurations& configurations,
 	ScreenConfigurations& currentConfigurations)

@@ -462,6 +462,32 @@ AddFilesToPackage add-ons kernel bluetooth : $(SYSTEM_BT_STACK) ;
 # the MIME DB
 CopyDirectoryToPackage data : <mimedb>mime_db : : : isTarget ;
 
+# Defaults copied into new home directories.
+AddDirectoryToPackage data home_template Desktop : home-desktop.rdef ;
+AddDirectoryToPackage data home_template config : home-config.rdef ;
+AddDirectoryToPackage data home_template config cache ;
+AddDirectoryToPackage data home_template config non-packaged ;
+AddDirectoryToPackage data home_template config packages ;
+AddDirectoryToPackage data home_template config settings ;
+AddDirectoryToPackage data home_template config settings boot ;
+AddDirectoryToPackage data home_template config var ;
+AddDirectoryToPackage data home_template mail : home-mail.rdef ;
+AddDirectoryToPackage data home_template mail draft : home-mail-draft.rdef ;
+AddDirectoryToPackage data home_template mail in : home-mail-in.rdef ;
+AddDirectoryToPackage data home_template mail out : home-mail-out.rdef ;
+AddDirectoryToPackage data home_template mail queries : home-mail-queries.rdef ;
+AddDirectoryToPackage data home_template mail sent : home-mail-sent.rdef ;
+AddDirectoryToPackage data home_template mail spam : home-mail-spam.rdef ;
+
+local templateFirstLogin = <template-first-login>first_login ;
+SEARCH on $(templateFirstLogin) = [ FDirName $(HAIKU_TOP) data settings ] ;
+AddFilesToPackage data home_template config settings : $(templateFirstLogin) ;
+
+local templateBootScripts = UserBootscript UserSetupEnvironment.sample ;
+templateBootScripts = $(templateBootScripts:G=template-boot) ;
+SEARCH on $(templateBootScripts) = [ FDirName $(HAIKU_TOP) data config boot ] ;
+AddFilesToPackage data home_template config settings boot : $(templateBootScripts) ;
+
 # directory attributes
 AddDirectoryToPackage apps : system-apps.rdef ;
 AddDirectoryToPackage preferences : system-preferences.rdef ;

@@ -76,7 +76,19 @@ public:
 			return AddSubMessage(parameter, index, target);
 		}
 
-		message.AddString("args", parameter.values[index]);
+		// A plain condition nested in a container, e.g. "environment NAME
+		// VALUE" inside an "or {}" block. Collect all of its arguments into a
+		// single sub-message rather than emitting one condition per value.
+		if (index != 0)
+			return B_OK;
+
+		for (int32 valueIndex = 0; valueIndex < parameter.value_count;
+				valueIndex++) {
+			status_t status = message.AddString("args",
+				parameter.values[valueIndex]);
+			if (status != B_OK)
+				return status;
+		}
 		return target.AddMessage(parameter.name, &message);
 	}
 
@@ -164,6 +176,7 @@ const static settings_template kJobTemplate[] = {
 	{B_STRING_TYPE, "name", NULL, true},
 	{B_BOOL_TYPE, "disabled", NULL},
 	{B_STRING_TYPE, "launch", NULL},
+	{B_STRING_TYPE, "user", NULL},
 	{B_STRING_TYPE, "requires", NULL},
 	{B_BOOL_TYPE, "legacy", NULL},
 	{B_MESSAGE_TYPE, "port", kPortTemplate},

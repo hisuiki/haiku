@@ -20,10 +20,16 @@ struct RosterAppInfo : app_info {
 		// token is meaningful only if state is APP_STATE_PRE_REGISTERED and
 		// team is -1.
 	bigtime_t			registration_time;	// time of first addition
+	pid_t				session;
+		// the login session the team belongs to, 0 when it has none
+	uid_t				uid;
+		// the user the team runs as
 
 	RosterAppInfo();
 	void Init(thread_id thread, team_id team, port_id port, uint32 flags,
 		const entry_ref *ref, const char *signature);
+
+	void SetTeam(team_id team);
 
 	RosterAppInfo *Clone() const;
 	bool IsRunning() const;

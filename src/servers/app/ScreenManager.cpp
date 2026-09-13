@@ -129,6 +129,14 @@ ScreenManager::AcquireScreens(ScreenOwner* owner, int32* wishList,
 	for (int32 i = 0; i < fScreenList.CountItems(); i++) {
 		screen_item* item = fScreenList.ItemAt(i);
 
+		// A screen someone else holds is only taken when the caller insists,
+		// and only if its owner agrees to let go: that is how one desktop
+		// takes the display from another when the session on it changes.
+		if (item->owner != NULL && item->owner != owner && force
+			&& item->owner->ReleaseScreen(item->screen.Get())) {
+			item->owner = NULL;
+		}
+
 		if (item->owner == NULL && list.AddItem(item->screen.Get())) {
 			item->owner = owner;
 			added++;

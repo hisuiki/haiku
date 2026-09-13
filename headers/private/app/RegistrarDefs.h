@@ -125,6 +125,7 @@ enum {
 	B_REG_GET_USER							= 'rgus',
 	B_REG_GET_GROUP							= 'rggr',
 	B_REG_GET_USER_GROUPS					= 'rgug',
+	B_REG_AUTHENTICATE_USER				= 'rgau',
 	B_REG_UPDATE_USER						= 'ruus',
 	B_REG_DELETE_USER						= 'rdus',
 	B_REG_UPDATE_GROUP						= 'rugr',
@@ -195,4 +196,3 @@ struct flat_app_info {
 
 
 #endif	// REGISTRAR_DEFS_H
-

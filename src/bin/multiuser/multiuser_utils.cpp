@@ -5,16 +5,34 @@
 
 #include "multiuser_utils.h"
 
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
+
+#include <fs_attr.h>
 
 #include <AutoDeleterPosix.h>
 
 #include <user_group.h>
+
+
+//! The administrator's template overrides the package-provided template.
+static const char* const kHomeTemplates[] = {
+	"/boot/system/data/home_template",
+	"/boot/system/settings/home_template"
+};
+
+static const char* const kHomeDirectories[] = {
+	"Desktop", "config", "config/cache", "config/non-packaged",
+	"config/packages", "config/settings", "config/var"
+};
 
 
 status_t
@@ -172,9 +190,8 @@ setup_environment(struct passwd* passwd, bool preserveEnvironment, bool chngdir)
 	setenv("USER", passwd->pw_name, true);
 
 	pid_t pid = getpid();
-	// If stdin is not open, don't bother trying to TIOCSPGRP. (This is the
-	// case when there is no PTY, e.g. for a noninteractive SSH session.)
-	if (fcntl(STDIN_FILENO, F_GETFD) != -1) {
+	// Noninteractive SSH uses a pipe here, not a terminal.
+	if (isatty(STDIN_FILENO)) {
 		if (ioctl(STDIN_FILENO, TIOCSPGRP, &pid) != 0)
 			return errno;
 	}
@@ -195,6 +212,205 @@ setup_environment(struct passwd* passwd, bool preserveEnvironment, bool chngdir)
 
 		if (chdir(home) != 0)
 			return errno;
+	}
+
+	return B_OK;
+}
+
+
+// #pragma mark - home directories
+
+
+static void
+copy_attributes(int sourceFD, int destinationFD)
+{
+	DIR* attributes = fs_fopen_attr_dir(sourceFD);
+	if (attributes == NULL)
+		return;
+
+	while (dirent* entry = fs_read_attr_dir(attributes)) {
+		// Do not copy packagefs bookkeeping into the user's files.
+		if (strcmp(entry->d_name, "SYS:PACKAGE") == 0
+			|| strcmp(entry->d_name, "SYS:PACKAGE_FILE") == 0) {
+			continue;
+		}
+
+		attr_info info;
+		if (fs_stat_attr(sourceFD, entry->d_name, &info) != 0)
+			continue;
+
+		void* buffer = malloc(info.size);
+		if (buffer == NULL)
+			continue;
+
+		ssize_t bytesRead = fs_read_attr(sourceFD, entry->d_name, info.type, 0,
+			buffer, info.size);
+		if (bytesRead >= 0) {
+			fs_write_attr(destinationFD, entry->d_name, info.type, 0, buffer,
+				bytesRead);
+		}
+		free(buffer);
+	}
+
+	fs_close_attr_dir(attributes);
+}
+
+
+static status_t
+copy_file(const char* from, const char* to, const struct stat& fromStat,
+	uid_t uid, gid_t gid)
+{
+	int source = open(from, O_RDONLY);
+	if (source < 0)
+		return errno;
+	FileDescriptorCloser sourceCloser(source);
+
+	// Template files can be read-only in packagefs; their copies are writable.
+	int destination = open(to, O_WRONLY | O_CREAT | O_TRUNC,
+		(fromStat.st_mode & 0777) | S_IRUSR | S_IWUSR);
+	if (destination < 0)
+		return errno;
+	FileDescriptorCloser destinationCloser(destination);
+
+	char buffer[64 * 1024];
+	ssize_t bytesRead;
+	while ((bytesRead = read(source, buffer, sizeof(buffer))) > 0) {
+		if (write(destination, buffer, bytesRead) != bytesRead)
+			return errno;
+	}
+	if (bytesRead < 0)
+		return errno;
+
+	copy_attributes(source, destination);
+	if (fchown(destination, uid, gid) != 0)
+		return errno;
+
+	return B_OK;
+}
+
+
+//! Recursively merges a template while preserving attributes.
+static status_t
+copy_entry(const char* from, const char* to, uid_t uid, gid_t gid)
+{
+	struct stat fromStat;
+	if (lstat(from, &fromStat) != 0)
+		return errno;
+
+	if (S_ISLNK(fromStat.st_mode)) {
+		char target[PATH_MAX];
+		ssize_t length = readlink(from, target, sizeof(target) - 1);
+		if (length < 0)
+			return errno;
+		target[length] = '\0';
+
+		if (symlink(target, to) != 0 && errno != EEXIST)
+			return errno;
+		lchown(to, uid, gid);
+		return B_OK;
+	}
+
+	if (!S_ISDIR(fromStat.st_mode))
+		return copy_file(from, to, fromStat, uid, gid);
+
+	if (mkdir(to, 0755) != 0 && errno != EEXIST)
+		return errno;
+
+	int destination = open(to, O_RDONLY);
+	if (destination >= 0) {
+		int source = open(from, O_RDONLY);
+		if (source >= 0) {
+			copy_attributes(source, destination);
+			close(source);
+		}
+		fchown(destination, uid, gid);
+		close(destination);
+	}
+
+	DIR* directory = opendir(from);
+	if (directory == NULL)
+		return errno;
+
+	status_t status = B_OK;
+	while (dirent* entry = readdir(directory)) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+			continue;
+
+		char fromEntry[PATH_MAX];
+		char toEntry[PATH_MAX];
+		if (snprintf(fromEntry, sizeof(fromEntry), "%s/%s", from,
+					entry->d_name) >= (int)sizeof(fromEntry)
+			|| snprintf(toEntry, sizeof(toEntry), "%s/%s", to, entry->d_name)
+					>= (int)sizeof(toEntry)) {
+			status = B_NAME_TOO_LONG;
+			continue;
+		}
+
+		status_t entryStatus = copy_entry(fromEntry, toEntry, uid, gid);
+		if (entryStatus != B_OK)
+			status = entryStatus;
+	}
+
+	closedir(directory);
+	return status;
+}
+
+
+status_t
+create_user_home(const char* home, uid_t uid, gid_t gid, bool fromTemplate)
+{
+	if (home == NULL || home[0] != '/')
+		return B_BAD_VALUE;
+
+	if (mkdir(home, 0700) != 0 && errno != EEXIST)
+		return errno;
+	if (chown(home, uid, gid) != 0)
+		return errno;
+
+	bool copiedTemplate = false;
+	for (size_t i = 0; fromTemplate
+			&& i < sizeof(kHomeTemplates) / sizeof(kHomeTemplates[0]); i++) {
+		struct stat st;
+		if (stat(kHomeTemplates[i], &st) != 0 || !S_ISDIR(st.st_mode))
+			continue;
+
+		status_t status = copy_entry(kHomeTemplates[i], home, uid, gid);
+		if (status != B_OK)
+			return status;
+		copiedTemplate = true;
+	}
+	if (!copiedTemplate) {
+		for (size_t i = 0; i < sizeof(kHomeDirectories) / sizeof(kHomeDirectories[0]);
+				i++) {
+			char path[PATH_MAX];
+			if (snprintf(path, sizeof(path), "%s/%s", home, kHomeDirectories[i])
+					>= (int)sizeof(path)) {
+				return B_NAME_TOO_LONG;
+			}
+			if (mkdir(path, 0755) != 0 && errno != EEXIST)
+				return errno;
+			if (chown(path, uid, gid) != 0)
+				return errno;
+		}
+	}
+
+	char firstLoginPath[PATH_MAX];
+	if (snprintf(firstLoginPath, sizeof(firstLoginPath),
+			"%s/config/settings/first_login", home) < (int)sizeof(firstLoginPath)) {
+		struct stat st;
+		if (stat(firstLoginPath, &st) != 0) {
+			char replicantsPath[PATH_MAX];
+			snprintf(replicantsPath, sizeof(replicantsPath),
+				"%s/config/settings/deskbar/replicants", home);
+			if (stat(replicantsPath, &st) != 0) {
+				int fd = open(firstLoginPath, O_WRONLY | O_CREAT | O_EXCL, 0644);
+				if (fd >= 0) {
+					write(fd, "1\n", 2);
+					fchown(fd, uid, gid);
+					close(fd);
+				}
+			}
+		}
 	}
 
 	return B_OK;

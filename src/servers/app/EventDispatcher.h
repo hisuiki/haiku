@@ -133,6 +133,7 @@ class EventDispatcher : public BLocker {
 		EventStream*	fStream;
 		thread_id		fThread;
 		thread_id		fCursorThread;
+		bool			fIsStopping;
 
 		EventTarget*	fPreviousMouseTarget;
 		EventTarget*	fFocus;

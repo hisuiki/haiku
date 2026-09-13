@@ -12,6 +12,10 @@
 
 #include "AppServer.h"
 
+#include <unistd.h>
+
+#include <OS.h>
+
 #include <syslog.h>
 
 #include <AutoDeleter.h>
@@ -52,6 +56,7 @@ AppServer::AppServer(status_t* status)
 	:
 	SERVER_BASE("application/x-vnd.Haiku-app_server", "picasso", -1, false,
 		status),
+	fActiveDesktop(NULL),
 	fDesktopLock("AppServerDesktopLock")
 {
 	openlog("app_server", 0, LOG_DAEMON);
@@ -113,7 +118,19 @@ AppServer::MessageReceived(BMessage* message)
 		{
 			Desktop* desktop = NULL;
 
-			int32 userID = message->GetInt32("user", 0);
+			// Which desktop a client belongs to follows from who it runs as,
+			// and that is what the kernel says about its team - never the user
+			// ID in the request, which the client fills in itself.
+			team_id callerTeam = message->ReturnAddress().Team();
+			team_info callerInfo;
+			if (callerTeam < 0
+				|| get_team_info(callerTeam, &callerInfo) != B_OK) {
+				BMessage reply((uint32)B_PERMISSION_DENIED);
+				message->SendReply(&reply);
+				break;
+			}
+
+			int32 userID = callerInfo.uid;
 			int32 version = message->GetInt32("version", 0);
 			const char* targetScreen = message->GetString("target");
 
@@ -122,13 +139,26 @@ AppServer::MessageReceived(BMessage* message)
 					"support the current server protocol (%" B_PRId32 ").\n",
 					userID, version);
 			} else {
-				desktop = _FindDesktop(userID, targetScreen);
+				// A seat is a login session, and every client of one runs in
+				// it: the kernel says which, whatever the client runs as. The
+				// system services started outside any session - the
+				// input_server, the media services - share the session of the
+				// launch daemon, and attach to whichever seat is in front
+				// rather than having one of their own.
+				desktop = _FindDesktopForSession(callerInfo.session_id);
 				if (desktop == NULL) {
-					// we need to create a new desktop object for this user
-					// TODO: test if the user exists on the system
-					// TODO: maybe have a separate AS_START_DESKTOP_SESSION for
-					// authorizing the user
-					desktop = _CreateDesktop(userID, targetScreen);
+					// Not a seat: a system service, or a program run over a
+					// network login, which is a session of its own to the
+					// kernel but not one anybody sits at. Those attach to
+					// whichever seat is in front. Seats themselves are made
+					// when the launch daemon says a login session has started.
+					desktop = fActiveDesktop;
+				}
+
+				if (desktop == NULL) {
+					// Nothing has a seat yet, and something needs to draw.
+					desktop = _CreateDesktop(userID, targetScreen,
+						callerInfo.session_id);
 				}
 			}
 
@@ -138,6 +168,52 @@ AppServer::MessageReceived(BMessage* message)
 			else
 				reply.what = (uint32)B_ERROR;
 
+			message->SendReply(&reply);
+			break;
+		}
+
+		case AS_ACTIVATE_DESKTOP:
+		{
+			// Only the launch daemon decides which session is in front, and it
+			// runs as root; the kernel says who is really asking.
+			team_id callerTeam = message->ReturnAddress().Team();
+			team_info callerInfo;
+			status_t status = callerTeam >= 0
+				&& get_team_info(callerTeam, &callerInfo) == B_OK
+					? B_OK : B_PERMISSION_DENIED;
+			if (status == B_OK && callerInfo.uid != 0)
+				status = B_PERMISSION_DENIED;
+
+			int32 userID = message->GetInt32("user", -1);
+			if (status == B_OK && userID < 0)
+				status = B_BAD_VALUE;
+			if (status == B_OK) {
+				status = _ActivateDesktop((uid_t)userID,
+					message->GetBool("create", false),
+					(pid_t)message->GetInt32("session", 0));
+			}
+
+			BMessage reply((uint32)status);
+			message->SendReply(&reply);
+			break;
+		}
+
+		case AS_CLOSE_DESKTOP:
+		{
+			team_id callerTeam = message->ReturnAddress().Team();
+			team_info callerInfo;
+			status_t status = callerTeam >= 0
+				&& get_team_info(callerTeam, &callerInfo) == B_OK
+					? B_OK : B_PERMISSION_DENIED;
+			if (status == B_OK && callerInfo.uid != 0)
+				status = B_PERMISSION_DENIED;
+
+			if (status == B_OK) {
+				status = _CloseDesktop(
+					(pid_t)message->GetInt32("session", 0));
+			}
+
+			BMessage reply((uint32)status);
 			message->SendReply(&reply);
 			break;
 		}
@@ -180,12 +256,19 @@ AppServer::QuitRequested()
 /*!	\brief Creates a desktop object for an authorized user
 */
 Desktop*
-AppServer::_CreateDesktop(uid_t userID, const char* targetScreen)
+AppServer::_CreateDesktop(uid_t userID, const char* targetScreen, pid_t sessionID)
 {
 	BAutolock locker(fDesktopLock);
+
+	// A desktop takes the display as it starts, so whoever has it must give it
+	// up first. The session that has just started is the one in front.
+	if (fActiveDesktop != NULL)
+		fActiveDesktop->SuspendScreen();
+
 	ObjectDeleter<Desktop> desktop;
 	try {
 		desktop.SetTo(new Desktop(userID, targetScreen));
+		desktop->SetSessionID(sessionID);
 
 		status_t status = desktop->Init();
 		if (status == B_OK)
@@ -203,7 +286,121 @@ AppServer::_CreateDesktop(uid_t userID, const char* targetScreen)
 		return NULL;
 	}
 
+	fActiveDesktop = desktop.Get();
+	syslog(LOG_INFO, "made a desktop for user %d (session %d)\n",
+		(int)userID, (int)sessionID);
+
 	return desktop.Detach();
+}
+
+
+/*!	Gives the display to the desktop of \a userID, and takes it from whichever
+	desktop has it: this is what switching between the sessions of different
+	users comes down to. The sessions themselves keep running either way.
+*/
+Desktop*
+AppServer::_FindDesktopForSession(pid_t sessionID)
+{
+	if (sessionID <= 0)
+		return NULL;
+
+	BAutolock locker(fDesktopLock);
+
+	for (int32 i = 0; i < fDesktops.CountItems(); i++) {
+		Desktop* desktop = fDesktops.ItemAt(i);
+		if (desktop->SessionID() == sessionID)
+			return desktop;
+	}
+
+	return NULL;
+}
+
+
+/*!	Drops the desktop of a session that has ended, freeing the screen it was
+	suspended to. The desktop in front is never closed: whoever ends a session
+	gives the display to another one first.
+*/
+status_t
+AppServer::_CloseDesktop(pid_t sessionID)
+{
+	BAutolock locker(fDesktopLock);
+
+	Desktop* desktop = _FindDesktopForSession(sessionID);
+	if (desktop == NULL)
+		return B_NAME_NOT_FOUND;
+	if (desktop == fActiveDesktop) {
+		desktop->SuspendScreen();
+		fActiveDesktop = NULL;
+	}
+
+	fDesktops.RemoveItem(desktop, false);
+	locker.Unlock();
+
+	desktop->PostMessage(B_QUIT_REQUESTED);
+	return B_OK;
+}
+
+
+status_t
+AppServer::_ActivateDesktop(uid_t userID, bool createIfNeeded, pid_t sessionID)
+{
+	BAutolock locker(fDesktopLock);
+
+	// The desktop of this session, if it has one already.
+	Desktop* desktop = _FindDesktopForSession(sessionID);
+	if (desktop == NULL) {
+		desktop = _FindDesktop(userID, NULL);
+		if (desktop != NULL && sessionID > 0) {
+			if (desktop->SessionID() == 0) {
+				// The first desktop the app_server made, before any session
+				// existed, for the services that were already running. The
+				// session of the same user takes it over.
+				desktop->SetSessionID(sessionID);
+			} else if (desktop->SessionID() != sessionID) {
+				// It belongs to another session of the same user.
+				desktop = NULL;
+			}
+		}
+	}
+
+	if (desktop == NULL && createIfNeeded) {
+		// A session has just started: it gets a desktop of its own, and that
+		// desktop comes to the front.
+		desktop = _CreateDesktop(userID, NULL, sessionID);
+		if (desktop == NULL)
+			return B_ERROR;
+
+		return B_OK;
+	}
+	if (desktop == NULL)
+		return B_NAME_NOT_FOUND;
+	if (desktop == fActiveDesktop && !desktop->IsScreenSuspended())
+		return B_OK;
+
+	if (fActiveDesktop != NULL && fActiveDesktop != desktop) {
+		status_t status = fActiveDesktop->SuspendScreen();
+		if (status != B_OK)
+			return status;
+	}
+
+	status_t status = desktop->ResumeScreen();
+	syslog(LOG_INFO, "desktop of user %d takes the screen: %s\n",
+		(int)desktop->UserID(), strerror(status));
+	if (status != B_OK)
+		return status;
+
+	fActiveDesktop = desktop;
+	return B_OK;
+}
+
+
+void
+AppServer::InputServerRegistered()
+{
+	BAutolock locker(fDesktopLock);
+
+	if (fActiveDesktop != NULL && !fActiveDesktop->IsScreenSuspended())
+		fActiveDesktop->TakeInput();
 }
 
 

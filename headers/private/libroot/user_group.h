@@ -92,6 +92,7 @@ port_id		get_registrar_authentication_port();
 void		set_registrar_authentication_port(port_id port);
 status_t	send_authentication_request_to_registrar(KMessage& request,
 				KMessage& reply);
+status_t	authenticate_user(const char* name, const char* password);
 
 
 template<typename Type>

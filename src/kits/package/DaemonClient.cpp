@@ -13,6 +13,8 @@
 
 #include <Directory.h>
 #include <Entry.h>
+#include <FindDirectory.h>
+#include <Path.h>
 #include <package/CommitTransactionResult.h>
 #include <package/InstallationLocationInfo.h>
 #include <package/PackageInfo.h>
@@ -92,6 +94,24 @@ BDaemonClient::GetInstallationLocationInfo(
 			latestInactivePackages)) != B_OK
 		|| (error = reply.FindInt64("change count", &changeCount)) != B_OK) {
 		return error;
+	}
+
+	if (location == B_PACKAGE_INSTALLATION_LOCATION_HOME) {
+		BPath packagesPath;
+		BDirectory packagesDirectory;
+		node_ref packagesDirectoryRef;
+		error = find_directory(B_USER_PACKAGES_DIRECTORY, &packagesPath);
+		if (error == B_OK)
+			error = packagesDirectory.SetTo(packagesPath.Path());
+		if (error == B_OK)
+			error = packagesDirectory.GetNodeRef(&packagesDirectoryRef);
+		if (error != B_OK
+			|| packagesDirectoryRef
+				!= node_ref(packagesDirectoryDevice, packagesDirectoryNode)) {
+			// package_daemon currently manages a single active home packagefs.
+			// Never let a different user write a transaction into that volume.
+			return B_NOT_SUPPORTED;
+		}
 	}
 
 	BPackageInfoSet currentlyActivePackages;

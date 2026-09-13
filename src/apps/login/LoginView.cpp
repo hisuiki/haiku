@@ -30,10 +30,18 @@ public:
 						 : BStringItem("", level, expanded)
 						{
 							if (pwd) {
+								// The real name, up to the first comma of the
+								// GECOS field. An account without one is shown
+								// by the name it logs in with, rather than as
+								// an empty row.
 								BString name(pwd->pw_gecos);
-								// TODO: truncate at first ;
+								int32 comma = name.FindFirst(',');
+								if (comma >= 0)
+									name.Truncate(comma);
+								name.Trim();
 								fLogin = pwd->pw_name;
-								SetText(name.String());
+								SetText(name.IsEmpty()
+									? pwd->pw_name : name.String());
 							}
 						};
 	virtual			~PwdItem() {};
@@ -44,7 +52,8 @@ private:
 
 
 LoginView::LoginView(BRect frame)
-	: BView(frame, "LoginView", B_FOLLOW_ALL, B_PULSE_NEEDED)
+	:
+	BView(frame, "LoginView", B_FOLLOW_ALL, B_PULSE_NEEDED)
 {
 	// TODO: when I don't need to test in BeOS anymore,
 	// rewrite to use layout engine.
@@ -128,10 +137,11 @@ LoginView::AttachedToWindow()
 	fRebootButton->SetTarget(be_app_messenger);
 	fLoginButton->SetTarget(this);
 	Window()->SetDefaultButton(fLoginButton);
-	//fLoginControl->MakeFocus();
-	fUserList->MakeFocus();
+	// Typing a name is what people do first; picking one from the list
+	// fills in the same field.
+	fLoginControl->MakeFocus();
 	// populate user list
-	BMessenger(this).SendMessage(kAddNextUser);
+	AddUsers();
 
 	// size window relative to buttons
 	BRect bounds = Window()->Bounds();
@@ -153,9 +163,6 @@ LoginView::MessageReceived(BMessage *message)
 {
 	switch (message->what) {
 		case kSetProgress:
-			break;
-		case kAddNextUser:
-			AddNextUser();
 			break;
 		case kUserSelected:
 		{
@@ -211,10 +218,12 @@ LoginView::MessageReceived(BMessage *message)
 			EnableControls(true);
 			break;
 		case kLoginOk:
-			// XXX: quit ?
-			if (Window()) {
-				Window()->Hide();
-			}
+			// The session now has the display, and this greeter is behind it,
+			// ready for whoever comes back to a locked seat. Only what was
+			// typed into it is forgotten.
+			fPasswordControl->SetText("");
+			fInfoView->SetText("");
+			fLoginControl->MakeFocus();
 			break;
 		default:
 			message->PrintToStream();
@@ -237,27 +246,22 @@ LoginView::Pulse()
 
 
 void
-LoginView::AddNextUser()
+LoginView::AddUsers()
 {
-	struct passwd *pwd;
-	if (fUserList->CountItems() < 1)
-		setpwent();
-
-	pwd = getpwent();
-
-	if (pwd && pwd->pw_shell &&
-		strcmp(pwd->pw_shell, "false") &&
-		strcmp(pwd->pw_shell, "true") &&
-		strcmp(pwd->pw_shell, "/bin/false") &&
-		strcmp(pwd->pw_shell, "/bin/true")) {
-		// not disabled
-		PwdItem *item = new PwdItem(pwd);
-		fUserList->AddItem(item);
+	setpwent();
+	while (struct passwd* pwd = getpwent()) {
+		if (pwd->pw_uid != 0 && pwd->pw_shell != NULL
+			&& strcmp(pwd->pw_shell, "false") != 0
+			&& strcmp(pwd->pw_shell, "true") != 0
+			&& strcmp(pwd->pw_shell, "/bin/false") != 0
+			&& strcmp(pwd->pw_shell, "/bin/true") != 0
+			&& pwd->pw_name != NULL && pwd->pw_name[0] != '_') {
+			// not disabled, and not one of the accounts services run as
+			PwdItem* item = new PwdItem(pwd);
+			fUserList->AddItem(item);
+		}
 	}
-	if (pwd)
-		BMessenger(this).SendMessage(kAddNextUser);
-	else
-		endpwent();
+	endpwent();
 }
 
 
@@ -275,4 +279,3 @@ LoginView::EnableControls(bool enable)
 	fRebootButton->SetEnabled(enable);
 	fLoginButton->SetEnabled(enable);
 }
-

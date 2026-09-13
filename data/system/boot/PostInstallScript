@@ -8,10 +8,10 @@ title=$1
 freshInstallIndicator=$2
 postInstallDir=$3
 
-if [ -e $freshInstallIndicator ]; then
+if [ -e "$freshInstallIndicator" ] || [ "$title" = "first login" -a ! -e "$HOME/config/settings/deskbar/replicants" ]; then
 	# execute scripts
 
-	if [ "$postInstallDir" == "/boot/system/boot/post-install" ]; then
+	if [ "$postInstallDir" = "/boot/system/boot/post-install" ]; then
 		# Special case for one script file that isn't in a package.  Rest
 		# of the files in there will be run by package_daemon when
 		# doing first boot processing.  Can be removed when Gerrit
@@ -25,15 +25,15 @@ if [ -e $freshInstallIndicator ]; then
 			ls "$postInstallDir" > /dev/dprintf
 		fi
 	else
-		for f in $postInstallDir/*.sh
+		for f in "$postInstallDir"/*.sh
 		do
-			if [ -f $f ]; then
+			if [ -f "$f" ]; then
 				echo "Running $title script $f ..." > /dev/dprintf
-				$f
+				"$f"
 			fi
 		done
 	fi
 
 	sync
-	rm $freshInstallIndicator
+	rm -f "$freshInstallIndicator"
 fi

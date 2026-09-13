@@ -14,13 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pwd.h>
-
 #include <LaunchRoster.h>
+#include <LaunchRosterPrivate.h>
 #include <RosterPrivate.h>
-#include <shadow.h>
-
-#include "multiuser_utils.h"
 
 #include "LoginApp.h"
 #include "LoginWindow.h"
@@ -36,8 +32,8 @@ const char *kLoginAppSig = "application/x-vnd.Haiku-Login";
 LoginApp::LoginApp()
 	:
 	BApplication(kLoginAppSig),
-	fEditShelfMode(false),
-	fModalMode(true)
+	fModalMode(true),
+	fQuitAllowed(false)
 {
 }
 
@@ -50,28 +46,38 @@ LoginApp::~LoginApp()
 void
 LoginApp::ReadyToRun()
 {
+	{
+		const char* loginSession = getenv("HAIKU_LOGIN_SESSION");
+		if (loginSession == NULL || strcmp(loginSession, "1") != 0) {
+			BAlert* alert = new BAlert(B_TRANSLATE("Login unavailable"),
+				B_TRANSLATE("Login can only run in the system login session."),
+				B_TRANSLATE("OK"));
+			alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+			alert->Go(NULL);
+			fQuitAllowed = true;
+			PostMessage(B_QUIT_REQUESTED);
+			return;
+		}
+	}
+
 	BScreen screen;
 
-	if (fEditShelfMode) {
-		BString text(B_TRANSLATE("You can "
-			"customize the desktop shown behind the %appname% application by "
-			"dropping replicants onto it.\n\n"
-			"When you are finished just quit the application (Cmd-Q)."));
-		text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("Login"));
-		BAlert* alert = new BAlert(B_TRANSLATE("Info"), text, B_TRANSLATE("OK"));
-		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
-		alert->Go(NULL);
-	} else {
+	// The desktop goes up first: whichever window is shown last becomes the
+	// active one, and that has to be the login window, or typing goes nowhere
+	// until someone clicks into it.
+	fDesktopWindow = new DesktopWindow(screen.Frame());
+	fDesktopWindow->Show();
+
+	{
 		float sizeDelta = (float)be_plain_font->Size()/12.0f;
 		BRect frame(0, 0, 450 * sizeDelta, 150 * sizeDelta);
 		frame.OffsetBySelf(screen.Frame().Width()/2 - frame.Width()/2,
 			screen.Frame().Height()/2 - frame.Height()/2);
 		fLoginWindow = new LoginWindow(frame);
 		fLoginWindow->Show();
+		fLoginWindow->Activate();
 	}
 
-	fDesktopWindow = new DesktopWindow(screen.Frame(), fEditShelfMode);
-	fDesktopWindow->Show();
 	// TODO: add a shelf with Activity Monitor replicant :)
 }
 
@@ -86,10 +92,10 @@ LoginApp::MessageReceived(BMessage *message)
 			TryLogin(message);
 			// TODO
 			break;
-		case kHaltAction:
-			reboot = false;
-			// FALLTHROUGH
 		case kRebootAction:
+			reboot = true;
+			// FALLTHROUGH
+		case kHaltAction:
 		{
 			BRoster roster;
 			BRoster::Private rosterPrivate(roster);
@@ -122,24 +128,44 @@ LoginApp::MessageReceived(BMessage *message)
 void
 LoginApp::ArgvReceived(int32 argc, char **argv)
 {
+	const char* loginSession = getenv("HAIKU_LOGIN_SESSION");
+	if (loginSession != NULL && strcmp(loginSession, "1") == 0) {
+		if (argc > 1)
+			fprintf(stderr, "Login: command line options are disabled in the login session\n");
+		return;
+	}
+
 	for (int i = 1; i < argc; i++) {
 		BString arg(argv[i]);
 		//printf("[%d]: %s\n", i, argv[i]);
-		if (arg == "--edit")
-			fEditShelfMode = true;
-		else if (arg == "--nonmodal")
+		if (arg == "--nonmodal" && geteuid() == 0)
 			fModalMode = false;
 		else /*if (arg == "--help")*/ {
 			puts(B_TRANSLATE("Login application for Haiku\nUsage:"));
-			printf("%s [--nonmodal] [--edit]\n", argv[0]);
+			printf("%s [--nonmodal]\n", argv[0]);
 			puts(B_TRANSLATE("--nonmodal	Do not make the window modal"));
-			puts(B_TRANSLATE("--edit	Launch in shelf editing mode to "
-				"allow customizing the desktop."));
 			// just return to the shell
 			exit((arg == "--help") ? 0 : 1);
 			return;
 		}
 	}
+}
+
+
+bool
+LoginApp::QuitRequested()
+{
+	if (fQuitAllowed)
+		return true;
+
+	// The greeter stays up until someone logs in, but it never stands in the
+	// way of shutting down: the registrar calls a shutdown off as soon as any
+	// application refuses to quit, which would make the Halt and Reboot
+	// buttons, and the power button, do nothing at all.
+	BRoster roster;
+	bool shuttingDown = false;
+	return BRoster::Private(roster).IsShutDownInProgress(&shuttingDown) == B_OK
+		&& shuttingDown;
 }
 
 
@@ -153,14 +179,12 @@ LoginApp::TryLogin(BMessage *message)
 	if (message->FindString("login", &login) == B_OK) {
 		const char* password = message->GetString("password");
 
-		status = ValidateLogin(login, password);
-		if (status == B_OK) {
-			status = BLaunchRoster().StartSession(login);
-			if (status == B_OK)
-				Quit();
-		}
-
-		fprintf(stderr, "ValidateLogin: %s\n", strerror(status));
+		BLaunchRoster roster;
+		status = BLaunchRoster::Private(roster).SwitchSession(login, password);
+		// On success the greeter stays where it is, behind the session that
+		// now has the display. Locking or switching users brings it back.
+		if (status != B_OK)
+			fprintf(stderr, "SwitchSession: %s\n", strerror(status));
 	}
 
 	if (status == B_OK) {
@@ -170,24 +194,6 @@ LoginApp::TryLogin(BMessage *message)
 		reply.AddInt32("error", status);
 		message->SendReply(&reply);
 	}
-}
-
-
-status_t
-LoginApp::ValidateLogin(const char *login, const char *password)
-{
-	struct passwd *pwd;
-
-	pwd = getpwnam(login);
-	if (pwd == NULL)
-		return ENOENT;
-	if (strcmp(pwd->pw_name, login) != 0)
-		return ENOENT;
-
-	if (verify_password(pwd, getspnam(login), password))
-		return B_OK;
-
-	return B_PERMISSION_DENIED;
 }
 
 

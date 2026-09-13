@@ -98,7 +98,9 @@ PackageFSRoot::RegisterVolume(Volume* volume)
 			relativeRootPath = "..";
 			break;
 		case PACKAGE_FS_MOUNT_TYPE_HOME:
-			relativeRootPath = "../..";
+			// User homes live at /boot/home/<user>, so the config packagefs
+			// mount is three levels below the installation root.
+			relativeRootPath = "../../..";
 			break;
 		case PACKAGE_FS_MOUNT_TYPE_CUSTOM:
 		default:

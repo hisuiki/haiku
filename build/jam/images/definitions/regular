@@ -350,25 +350,25 @@ SYSTEM_ADD_ONS_FILE_SYSTEMS +=
 ;
 
 # Mailbox folders and symlink
-AddDirectoryToHaikuImage home mail : home-mail.rdef ;
-AddDirectoryToHaikuImage home mail draft : home-mail-draft.rdef ;
-AddDirectoryToHaikuImage home mail in : home-mail-in.rdef ;
-AddDirectoryToHaikuImage home mail out : home-mail-out.rdef ;
-AddDirectoryToHaikuImage home mail queries : home-mail-queries.rdef ;
-AddDirectoryToHaikuImage home mail sent : home-mail-sent.rdef ;
-AddDirectoryToHaikuImage home mail spam : home-mail-spam.rdef ;
+AddDirectoryToHaikuImage home user mail : home-mail.rdef ;
+AddDirectoryToHaikuImage home user mail draft : home-mail-draft.rdef ;
+AddDirectoryToHaikuImage home user mail in : home-mail-in.rdef ;
+AddDirectoryToHaikuImage home user mail out : home-mail-out.rdef ;
+AddDirectoryToHaikuImage home user mail queries : home-mail-queries.rdef ;
+AddDirectoryToHaikuImage home user mail sent : home-mail-sent.rdef ;
+AddDirectoryToHaikuImage home user mail spam : home-mail-spam.rdef ;
 
 # Add boot launch directory
-AddDirectoryToHaikuImage home config settings boot launch ;
+AddDirectoryToHaikuImage home user config settings boot launch ;
 
 # Add mail provider infos.
-AddFilesToHaikuImage home config settings Mail ProviderInfo :
+AddFilesToHaikuImage home user config settings Mail ProviderInfo :
 	$(HAIKU_PROVIDER_INFOS) ;
 
 # Add Tracker New Templates
-AddDirectoryToHaikuImage home config settings Tracker "Tracker New Templates"
+AddDirectoryToHaikuImage home user config settings Tracker "Tracker New Templates"
 	:  tracker-new-templates.rdef ;
-AddFilesToHaikuImage home config settings Tracker "Tracker New Templates"
+AddFilesToHaikuImage home user config settings Tracker "Tracker New Templates"
 	:
 	"<tracker-new-templates>C++ header"
 	"<tracker-new-templates>C++ source"
@@ -378,13 +378,13 @@ AddFilesToHaikuImage home config settings Tracker "Tracker New Templates"
 ;
 
 # printers
-AddDirectoryToHaikuImage home config settings printers Preview
+AddDirectoryToHaikuImage home user config settings printers Preview
 	: home-config-settings-printers-preview.rdef ;
 
 # padblocker
-AddDirectoryToHaikuImage home config settings touchpad ;
+AddDirectoryToHaikuImage home user config settings touchpad ;
 
 # shortcuts defaults
 local shortcutsSettingsFile = <settings>shortcuts_settings ;
 SEARCH on $(shortcutsSettingsFile) = [ FDirName $(HAIKU_TOP) data settings ] ;
-AddFilesToHaikuImage home config settings : $(shortcutsSettingsFile) ;
+AddFilesToHaikuImage home user config settings : $(shortcutsSettingsFile) ;

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/param.h>
+#include <unistd.h>
 
 #include <map>
 #include <new>
@@ -167,6 +168,20 @@ public:
 
 	const string& Name() const	{ return fName; }
 	const uid_t UID() const		{ return fUID; }
+	bool VerifyPassword(const char* password) const
+	{
+		const string& required = fPassword == "x"
+			? fShadowPassword : fPassword;
+		if (password == NULL)
+			return false;
+		if (required.empty())
+			return password[0] == '\0';
+		if (required[0] == '!' || required[0] == '*')
+			return false;
+
+		char* encrypted = crypt(password, required.c_str());
+		return encrypted != NULL && required == encrypted;
+	}
 
 	void SetShadowInfo(const char* password, int lastChanged, int min, int max,
 		int warn, int inactive, int expiration, int flags)
@@ -998,6 +1013,32 @@ AuthenticationManager::_RequestThread()
 				reply.SetWhat(error);
 				message.SendReply(&reply, -1, -1, 0, registrarTeam);
 
+				break;
+			}
+
+			case B_REG_AUTHENTICATE_USER:
+			{
+				// Password verification is a privileged broker operation. The login
+				// service submits credentials to the root launch_daemon, which is the
+				// only component that needs this interface.
+				if (!isRoot)
+					error = B_PERMISSION_DENIED;
+
+				const char* name;
+				const char* password;
+				if (error == B_OK && (message.FindString("name", &name) != B_OK
+					|| message.FindString("password", &password) != B_OK)) {
+					error = B_BAD_VALUE;
+				}
+
+				User* user = error == B_OK ? fUserDB->UserByName(name) : NULL;
+				if (error == B_OK
+					&& (user == NULL || !user->VerifyPassword(password))) {
+					error = B_PERMISSION_DENIED;
+				}
+
+				KMessage reply(error);
+				message.SendReply(&reply, -1, -1, 0, registrarTeam);
 				break;
 			}
 

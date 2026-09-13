@@ -25,6 +25,7 @@ typedef struct {
 } info_pack;
 
 bool get_team_name_and_icon(info_pack& infoPack, bool icon = false);
+bool is_team_visible(const team_info& info);
 bool launch(const char* mime, const char* path);
 void mix_colors(rgb_color& target, rgb_color& first, rgb_color& second, float mix);
 void find_self(entry_ref& ref);

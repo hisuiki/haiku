@@ -23,6 +23,15 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
+
+bool
+is_team_visible(const team_info& info)
+{
+	uid_t user = geteuid();
+	return user == 0 || info.uid == user;
+}
 
 
 bool
@@ -187,4 +196,3 @@ bar_rect(BRect& frame, BFont* font)
 
 	return rect;
 }
-

@@ -991,7 +991,7 @@ rule AddSourceDirectoryToHaikuImage dirTokens : flags
 {
 	# AddSourceDirectoryToHaikuImage <dirTokens> : <flags> ;
 
-	CopyDirectoryToHaikuImage home HaikuSources
+	CopyDirectoryToHaikuImage home user HaikuSources
 		: [ FDirName $(HAIKU_TOP) $(dirTokens) ]
 		: : : $(flags) ;
 }

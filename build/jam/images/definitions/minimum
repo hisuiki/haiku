@@ -43,6 +43,7 @@ SYSTEM_BIN = [ FFilterByBuildFeatures
 	kernel_debugger
 	keymap
 	keystore
+	launch_as
 	launch_roster
 	linkcatkeys
 	listarea
@@ -57,6 +58,7 @@ SYSTEM_BIN = [ FFilterByBuildFeatures
 	locale
 	logger
 	login
+	login_as
 	lsindex
 	makebootable
 	message
@@ -137,6 +139,7 @@ SYSTEM_APPS = [ FFilterByBuildFeatures
 	DriveSetup
 	Expander
 	Installer
+	Login
 	NetworkStatus
 	ProcessController
 	ShowImage
@@ -395,19 +398,19 @@ SYSTEM_ADD_ONS_FILE_SYSTEMS =
 ;
 
 # symlink to home on desktop
-AddSymlinkToHaikuImage home Desktop : /boot/home : Home ;
+AddSymlinkToHaikuImage home user Desktop : /boot/home/user : Home ;
 
 # global settings when a package is installed in ~/config
-AddDirectoryToHaikuImage home config settings global ;
+AddDirectoryToHaikuImage home user config settings global ;
 
 # user scripts and data files
 local userBootScripts = UserBootscript UserSetupEnvironment.sample ;
 SEARCH on $(userBootScripts) = [ FDirName $(HAIKU_TOP) data config boot ] ;
-AddFilesToHaikuImage home config settings boot : $(userBootScripts) ;
+AddFilesToHaikuImage home user config settings boot : $(userBootScripts) ;
 
 SEARCH on <user-first-login>first_login
 	= [ FDirName $(HAIKU_TOP) data settings ] ;
-AddFilesToHaikuImage home config settings : <user-first-login>first_login ;
+AddFilesToHaikuImage home user config settings : <user-first-login>first_login ;
 
 local etcDir = [ FDirName $(HAIKU_TOP) data etc ] ;
 local etcFiles = inputrc profile ;
@@ -423,7 +426,7 @@ AddFilesToHaikuImage system settings etc profile.d : $(profileFiles) ;
 local driverSettingsFiles = <driver-settings>kernel ;
 SEARCH on $(driverSettingsFiles)
 	= [ FDirName $(HAIKU_TOP) data settings kernel drivers ] ;
-AddFilesToHaikuImage home config settings kernel drivers
+AddFilesToHaikuImage home user config settings kernel drivers
 	: $(driverSettingsFiles) ;
 
 local networkSettingsFiles = <network-settings>services

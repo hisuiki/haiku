@@ -7,6 +7,7 @@
 #include "Conditions.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <driver_settings.h>
 #include <Entry.h>
@@ -94,6 +95,22 @@ private:
 };
 
 
+class RemovableCondition : public Condition {
+public:
+								RemovableCondition(const BMessage& args);
+
+	virtual	bool				Test(ConditionContext& context) const;
+	virtual	bool				IsConstant(ConditionContext& context) const;
+
+	virtual	BString				ToString() const;
+
+private:
+			BString				fPath;
+	mutable	bool				fIsRemovable;
+	mutable	bool				fTestPerformed;
+};
+
+
 class FileExistsCondition : public Condition {
 public:
 								FileExistsCondition(const BMessage& args);
@@ -112,6 +129,20 @@ public:
 	virtual	bool				IsConstant(ConditionContext& context) const;
 
 	virtual	BString				ToString() const;
+};
+
+
+class EnvironmentCondition : public Condition {
+public:
+								EnvironmentCondition(const BMessage& args);
+
+	virtual	bool				Test(ConditionContext& context) const;
+	virtual	bool				IsConstant(ConditionContext& context) const;
+	virtual	BString				ToString() const;
+
+private:
+			BString				fName;
+			BString				fValue;
 };
 
 
@@ -144,10 +175,14 @@ create_condition(const char* name, const BMessage& args)
 		return new SafeModeCondition();
 	if (strcmp(name, "read_only") == 0)
 		return new ReadOnlyCondition(args);
+	if (strcmp(name, "removable") == 0)
+		return new RemovableCondition(args);
 	if (strcmp(name, "file_exists") == 0)
 		return new FileExistsCondition(args);
 	if (strcmp(name, "network_available") == 0)
 		return new NetworkAvailableCondition();
+	if (strcmp(name, "environment") == 0)
+		return new EnvironmentCondition(args);
 	if (strcmp(name, "setting") == 0)
 		return new SettingCondition(args);
 
@@ -438,6 +473,48 @@ ReadOnlyCondition::ToString() const
 }
 
 
+// #pragma mark - removable
+
+
+RemovableCondition::RemovableCondition(const BMessage& args)
+	:
+	fPath(args.GetString("args")),
+	fIsRemovable(false),
+	fTestPerformed(false)
+{
+}
+
+
+bool
+RemovableCondition::Test(ConditionContext& context) const
+{
+	if (fTestPerformed)
+		return fIsRemovable;
+
+	fIsRemovable = Utility::IsRemovableVolume(
+		fPath.IsEmpty() ? "/boot" : fPath.String());
+	fTestPerformed = true;
+
+	return fIsRemovable;
+}
+
+
+bool
+RemovableCondition::IsConstant(ConditionContext& context) const
+{
+	return true;
+}
+
+
+BString
+RemovableCondition::ToString() const
+{
+	BString string = "removable ";
+	string << fPath;
+	return string;
+}
+
+
 // #pragma mark - file_exists
 
 
@@ -498,6 +575,46 @@ BString
 NetworkAvailableCondition::ToString() const
 {
 	return "network_available";
+}
+
+
+// #pragma mark - environment
+
+
+EnvironmentCondition::EnvironmentCondition(const BMessage& args)
+	:
+	fName(args.GetString("args", 0, NULL)),
+	fValue(args.GetString("args", 1, NULL))
+{
+}
+
+
+bool
+EnvironmentCondition::Test(ConditionContext& context) const
+{
+	const char* value = getenv(fName.String());
+	if (value == NULL)
+		return false;
+
+	return fValue.IsEmpty() || fValue == value;
+}
+
+
+bool
+EnvironmentCondition::IsConstant(ConditionContext& context) const
+{
+	return true;
+}
+
+
+BString
+EnvironmentCondition::ToString() const
+{
+	BString string("environment ");
+	string << fName;
+	if (!fValue.IsEmpty())
+		string << " = " << fValue;
+	return string;
 }
 
 

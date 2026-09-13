@@ -144,7 +144,9 @@ efi_gpt_scan_partition(int fd, partition_data* partition, void* _cookie)
 		char name[B_OS_NAME_LENGTH];
 		to_utf8(entry.name, EFI_PARTITION_NAME_LENGTH, name, sizeof(name));
 		child->name = strdup(name);
-		child->type = strdup(get_partition_type(entry.partition_type));
+
+		const char* type = get_partition_type(entry.partition_type);
+		child->type = strdup(type != NULL ? type : UNRECOGNIZED_PARTITION_NAME);
 		child->block_size = partition->block_size;
 		child->cookie = (void*)(addr_t)i;
 		child->content_cookie = header;

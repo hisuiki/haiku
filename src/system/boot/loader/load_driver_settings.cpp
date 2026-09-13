@@ -86,7 +86,13 @@ apply_boot_settings(void* kernelSettings, void* safemodeSettings)
 status_t
 load_driver_settings(stage2_args* /*args*/, Directory* volume)
 {
-	int fd = open_from(volume, "home/config/settings/kernel/drivers", O_RDONLY);
+	// The settings live in uid 0's home: /boot/home/user on a multi-user
+	// system, all of /boot/home on a single-user one, which is also what the
+	// first boot after an upgrade still finds.
+	int fd = open_from(volume, "home/user/config/settings/kernel/drivers",
+		O_RDONLY);
+	if (fd < B_OK)
+		fd = open_from(volume, "home/config/settings/kernel/drivers", O_RDONLY);
 	if (fd < B_OK)
 		return fd;
 

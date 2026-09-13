@@ -15,8 +15,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <pwd.h>
+
 #include <Application.h>
 #include <AutoDeleter.h>
+#include <LaunchRoster.h>
+#include <LaunchRosterPrivate.h>
 #include <Autolock.h>
 #include <Directory.h>
 #include <Entry.h>
@@ -35,6 +39,7 @@
 #include <private/shared/FunctionTracer.h>
 
 static	int32		sFunctionDepth = -1;
+
 
 #	define CALLED(x...) \
 		FunctionTracer _ft(debug_printf, this, __PRETTY_FUNCTION__, sFunctionDepth)
@@ -61,6 +66,22 @@ extern "C" BInputServerDevice*
 instantiate_input_device()
 {
 	return new(std::nothrow) KeyboardInputDevice();
+}
+
+
+//! Returns true on lookup failure so the privileged monitor stays closed.
+static bool
+login_screen_is_in_front()
+{
+	uid_t displayUser;
+	BLaunchRoster roster;
+	if (BLaunchRoster::Private(roster).GetDisplaySessionUser(displayUser)
+			!= B_OK) {
+		return true;
+	}
+
+	struct passwd* loginService = getpwnam("_login");
+	return loginService != NULL && loginService->pw_uid == displayUser;
 }
 
 
@@ -323,7 +344,8 @@ KeyboardDevice::_ControlThread()
 
 		if (isKeyDown && keycode == 0x34 // DELETE KEY
 			&& (states[fCommandKey >> 3] & (1 << (7 - (fCommandKey & 0x7))))
-			&& (states[fControlKey >> 3] & (1 << (7 - (fControlKey & 0x7))))) {
+			&& (states[fControlKey >> 3] & (1 << (7 - (fControlKey & 0x7))))
+			&& !login_screen_is_in_front()) {
 			LOG_EVENT("TeamMonitor called\n");
 
 			// show the team monitor
@@ -694,6 +716,8 @@ KeyboardInputDevice::_HandleMonitor(BMessage* message)
 	// Don't handle B_ENTRY_REMOVED, let the control thread take care of it.
 	return B_OK;
 #endif
+
+
 }
 
 

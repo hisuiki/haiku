@@ -1,8 +1,3 @@
-service x-vnd.Haiku-app_server {
-	env /system/boot/SetupEnvironment
-	launch /system/servers/app_server
-}
-
 target desktop {
 	env /system/boot/SetupEnvironment
 
@@ -48,22 +43,39 @@ target desktop {
 
 	job first-login {
 		launch /bin/sh /system/boot/PostInstallScript "first login" ~/config/settings/first_login /boot/system/boot/first-login
-		if file_exists ~/config/settings/first_login
+		if {
+			or {
+				file_exists ~/config/settings/first_login
+				not file_exists ~/config/settings/deskbar/replicants
+			}
+		}
 		requires x-vnd.Be-TSKB
 	}
 
 	job create-installer-link {
-		# When run from a read-only medium a.k.a. live desktop
+		# Only on live media.
 		if {
-			read_only
+			or {
+				read_only
+				removable
+			}
 			file_exists /boot/system/apps/Installer
 		}
 		launch /bin/ln -sf /boot/system/apps/Installer ~/Desktop/Installer
 	}
 }
 
-target first_boot {
-	job x-vnd.Haiku-FirstBootPrompt
+target session_start {
+	service x-vnd.Haiku-Login {
+		launch /system/apps/Login
+		if environment HAIKU_LOGIN_SESSION 1
+		on initial_volumes_mounted
+	}
+
+	job x-vnd.Haiku-FirstBootPrompt {
+		if not environment HAIKU_LOGIN_SESSION 1
+		on initial_volumes_mounted
+	}
 }
 
 target installer {
@@ -72,14 +84,10 @@ target installer {
 
 run {
 	if {
-		file_exists /system/bin/FirstBootPrompt
-		or {
-			not file_exists /boot/home/config/settings/Locale\ settings
-			read_only
-		}
+		environment HAIKU_LOGIN_SESSION 1
 	}
 	then {
-		first_boot
+		session_start
 	}
 	else {
 		desktop

@@ -25,16 +25,16 @@ public:
 	void			ReadyToRun();
 	void			MessageReceived(BMessage *message);
 	void			ArgvReceived(int32 argc, char **argv);
+	bool			QuitRequested();
 
 private:
 	void			TryLogin(BMessage *message);
-	status_t		ValidateLogin(const char *login, const char *password);
 	int				getpty(char *pty, char *tty);
 
 	DesktopWindow*	fDesktopWindow;
 	LoginWindow*	fLoginWindow;
-	bool			fEditShelfMode;
 	bool			fModalMode;
+	bool			fQuitAllowed;
 };
 
 #endif	// _LOGINAPP_H_

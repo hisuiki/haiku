@@ -345,6 +345,19 @@ static const uint32 kNumModulePaths = sizeof(kModulePaths)
 static const uint32 kFirstNonSystemModulePath = 1;
 
 
+/*!	Whether the kernel may create the module path at \a index, to watch it.
+	It only creates system directories: a home belongs to its user, and the
+	kernel creating directories there would also make a home appear before its
+	owner's account does.
+*/
+static inline bool
+may_create_module_path(uint32 index)
+{
+	return kModulePaths[index] != B_USER_ADDONS_DIRECTORY
+		&& kModulePaths[index] != B_USER_NONPACKAGED_ADDONS_DIRECTORY;
+}
+
+
 static ModuleNotificationService sModuleNotificationService;
 static bool sDisableUserAddOns = false;
 
@@ -636,7 +649,8 @@ search_module(const char* name, module_image** _moduleImage)
 		// let the VFS find that module for us
 
 		KPath basePath;
-		if (__find_directory(kModulePaths[i], gBootDevice, true,
+		if (__find_directory(kModulePaths[i], gBootDevice,
+			may_create_module_path(i),
 				basePath.LockBuffer(), basePath.BufferSize()) != B_OK)
 			continue;
 
@@ -1424,7 +1438,8 @@ ModuleNotificationService::_AddDirectory(const char* prefix)
 			break;
 
 		KPath pathBuffer;
-		if (__find_directory(kModulePaths[i], gBootDevice, true,
+		if (__find_directory(kModulePaths[i], gBootDevice,
+			may_create_module_path(i),
 				pathBuffer.LockBuffer(), pathBuffer.BufferSize()) != B_OK)
 			continue;
 
@@ -1595,7 +1610,8 @@ ModuleNotificationService::_Notify(int32 opcode, dev_t device, ino_t directory,
 
 	for (uint32 i = 0; i < kNumModulePaths; i++) {
 		KPath modulePath;
-		if (__find_directory(kModulePaths[i], gBootDevice, true,
+		if (__find_directory(kModulePaths[i], gBootDevice,
+			may_create_module_path(i),
 				modulePath.LockBuffer(), modulePath.BufferSize()) != B_OK)
 			continue;
 
@@ -1897,7 +1913,8 @@ module_init_post_boot_device(bool bootingFromBootLoaderVolume)
 					if (sDisableUserAddOns && i >= kFirstNonSystemModulePath)
 						continue;
 
-					if (__find_directory(kModulePaths[i], gBootDevice, true,
+					if (__find_directory(kModulePaths[i], gBootDevice,
+						may_create_module_path(i),
 							pathBuffer.LockBuffer(), pathBuffer.BufferSize())
 								!= B_OK) {
 						pathBuffer.UnlockBuffer();
@@ -2017,7 +2034,8 @@ open_module_list_etc(const char* prefix, const char* suffix)
 				break;
 
 			KPath pathBuffer;
-			if (__find_directory(kModulePaths[i], gBootDevice, true,
+			if (__find_directory(kModulePaths[i], gBootDevice,
+				may_create_module_path(i),
 					pathBuffer.LockBuffer(), pathBuffer.BufferSize()) != B_OK)
 				continue;
 

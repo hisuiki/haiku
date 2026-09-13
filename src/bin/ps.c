@@ -8,6 +8,8 @@
  *		Bjoern Herzig (xRaich[o]2x)
  *		Thomas Schmidt <thomas.compix@googlemail.com>
  */
+#include <grp.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
@@ -19,6 +21,8 @@ enum {
 	Team = 0,
 	Id,
 	Threads,
+	User,
+	Group,
 	Gid,
 	Uid
 };
@@ -31,15 +35,63 @@ struct ColumnIndo {
 	{ "Team",		"%-50s",	"%-50s"  },
 	{ "Id",			"%5s",		"%5" B_PRId32  },
 	{ "Threads",	"#%7s",		"%8" B_PRId32 },
+	{ "User",		"%-10s",	"%-10s" },
+	{ "Group",		"%-10s",	"%-10s" },
 	{ "Gid",		"%4s",		"%4d" },
 	{ "Uid",		"%4s",		"%4d" }
 };
 
 #define maxColumns  10
-int Columns[maxColumns] = { Team, Id, Threads, Gid, Uid, 0 };
+int Columns[maxColumns] = { Team, Id, Threads, User, Group, 0 };
 int ColumnsCount = 5;
 
 const char* sStates[] = {"run", "rdy", "msg", "zzz", "sus", "wait"};
+
+/*!	The name of an account, or its ID where there is no account of that ID.
+	Every team is looked up, and each lookup asks the registrar, so remember
+	the last answer: teams of one user usually come in runs.
+*/
+static const char*
+userName(uid_t user)
+{
+	static char name[64];
+	static uid_t cachedUser;
+	static bool cached = false;
+
+	if (!cached || cachedUser != user) {
+		struct passwd* passwd = getpwuid(user);
+		if (passwd != NULL && passwd->pw_name != NULL)
+			snprintf(name, sizeof(name), "%s", passwd->pw_name);
+		else
+			snprintf(name, sizeof(name), "%d", (int)user);
+		cachedUser = user;
+		cached = true;
+	}
+
+	return name;
+}
+
+
+static const char*
+groupName(gid_t group)
+{
+	static char name[64];
+	static gid_t cachedGroup;
+	static bool cached = false;
+
+	if (!cached || cachedGroup != group) {
+		struct group* groupEntry = getgrgid(group);
+		if (groupEntry != NULL && groupEntry->gr_name != NULL)
+			snprintf(name, sizeof(name), "%s", groupEntry->gr_name);
+		else
+			snprintf(name, sizeof(name), "%d", (int)group);
+		cachedGroup = group;
+		cached = true;
+	}
+
+	return name;
+}
+
 
 static void printTeamThreads(team_info* teamInfo, bool printSemaphoreInfo);
 static void printTeamInfo(team_info* teamInfo, bool printHeader);
@@ -68,6 +120,12 @@ printTeamInfo(team_info* teamInfo, bool printHeader)
 				break;
 			case Threads:
 				printf(Infos[Threads].format, teamInfo->thread_count);
+				break;
+			case User:
+				printf(Infos[User].format, userName(teamInfo->uid));
+				break;
+			case Group:
+				printf(Infos[Group].format, groupName(teamInfo->gid));
 				break;
 			case Gid:
 				printf(Infos[Gid].format, teamInfo->gid);
@@ -150,6 +208,7 @@ main(int argc, char** argv)
 						"-i : show system info\n"
 						"-s : show semaphore info\n"
 						"-o : display team info associated with the list\n"
+						"     (Team, Id, Threads, User, Group, Uid, Gid)\n"
 						"-a : show threads too (by default only teams are "
 							"displayed)\n");
 				return 0;

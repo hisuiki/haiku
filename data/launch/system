@@ -24,8 +24,16 @@ service x-vnd.Haiku-mount_server {
 	launch /system/servers/mount_server
 }
 
+# app_server is shared by all login sessions.
+service x-vnd.Haiku-app_server {
+	env /system/boot/SetupEnvironment
+	launch /system/servers/app_server
+	on_demand
+}
+
 service x-vnd.Haiku-media_server {
 	launch /system/servers/media_server
+	user _media
 	no_safemode
 	legacy
 	on initial_volumes_mounted
@@ -70,4 +78,5 @@ job x-vnd.Haiku-cddb_lookup {
 # target login
 job x-vnd.Haiku-autologin {
 	launch /system/bin/autologin
+	on initial_volumes_mounted
 }

@@ -137,6 +137,9 @@ const promise_mapping kPromiseMap[] = {
 	{ "_kern_set_area_protection",			PLEDGE_STDIO },
 	{ "_kern_set_memory_protection",		PLEDGE_STDIO },
 	{ "_kern_get_area_info",				PLEDGE_STDIO },
+	{ "_kern_area_for",						PLEDGE_STDIO },
+		// The runtime loader calls this from its own heap code before any
+		// team, confined or not, can reach main().
 	{ "_kern_get_memory_properties",		PLEDGE_STDIO },
 	{ "_kern_memory_advice",				PLEDGE_STDIO },
 	{ "_kern_sync_memory",					PLEDGE_STDIO },

@@ -65,6 +65,7 @@ InputManager::GetStream()
 	if (stream == NULL)
 		return NULL;
 
+	stream->Restart();
 	fUsedStreams.AddItem(stream);
 	return stream;
 }

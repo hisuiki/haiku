@@ -7,6 +7,7 @@
 #include "QuitMenu.h"
 #include "IconMenuItem.h"
 #include "ProcessController.h"
+#include "Utilities.h"
 
 #include <Roster.h>
 #include <Window.h>
@@ -85,6 +86,10 @@ QuitMenu::DetachedFromWindow()
 void
 QuitMenu::AddTeam(team_id tmid)
 {
+	team_info teamInfo;
+	if (get_team_info(tmid, &teamInfo) != B_OK || !is_team_visible(teamInfo))
+		return;
+
 	int	t = 0;
 	QuitMenuItem* item;
 	while ((item = (QuitMenuItem*) ItemAt(t++)) != NULL) {

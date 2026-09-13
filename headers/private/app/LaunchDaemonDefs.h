@@ -36,6 +36,12 @@ enum {
 	B_ENABLE_LAUNCH_JOB			= 'lnje',
 	B_STOP_LAUNCH_JOB			= 'lnsj',
 	B_LAUNCH_SESSION			= 'lnse',
+	B_LAUNCH_LOGIN_SESSION		= 'lnls',
+	B_SWITCH_SESSION			= 'lnss',
+	B_LOGOUT_SESSION			= 'lnlo',
+	B_LOCK_SESSION				= 'lnlk',
+	B_LAUNCH_IN_DISPLAY_SESSION	= 'lnds',
+	B_GET_DISPLAY_SESSION		= 'lngd',
 	B_REGISTER_SESSION_DAEMON	= 'lnrs',
 	B_REGISTER_LAUNCH_EVENT		= 'lnre',
 	B_UNREGISTER_LAUNCH_EVENT	= 'lnue',
@@ -53,4 +59,3 @@ enum {
 
 
 #endif	// LAUNCH_DAEMON_DEFS_H
-

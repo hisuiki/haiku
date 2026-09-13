@@ -11,9 +11,11 @@
 
 #include <errno.h>
 #include <grp.h>
+#include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <Directory.h>
@@ -30,14 +32,18 @@
 #include <LaunchRosterPrivate.h>
 #include <locks.h>
 #include <MessengerPrivate.h>
+#include <TokenSpace.h>
 #include <RosterPrivate.h>
+#include <ServerProtocol.h>
 #include <syscalls.h>
 #include <system_info.h>
+#include <user_group.h>
 
 #include "multiuser_utils.h"
 
 #include "Conditions.h"
 #include "Events.h"
+#include "InitHomeLayoutJob.h"
 #include "InitRealTimeClockJob.h"
 #include "InitSharedMemoryDirectoryJob.h"
 #include "InitTemporaryDirectoryJob.h"
@@ -73,6 +79,109 @@ enum launch_options {
 	FORCE_NOW		= 0x01,
 	TRIGGER_DEMAND	= 0x02
 };
+
+
+static const uint32 kMsgContinueSessionSwitch = 'lnsc';
+static const uint32 kMsgContinueLoginSession = 'lnlc';
+static const char* const kLoginServiceUser = "_login";
+static const char* const kAppServerSignature
+	= "application/x-vnd.Haiku-app_server";
+
+
+struct SessionSwitchContext {
+	BMessenger	daemon;
+	BMessenger	appServer;
+	team_id		sessionTeam;
+	BString		login;
+};
+
+
+struct EndSessionContext {
+	BMessenger	daemon;
+	BMessenger	appServer;
+	team_id		sessionTeam;
+};
+
+
+struct LoginSessionContext {
+	LoginSessionContext()
+		:
+		request(NULL),
+		loginUser((uid_t)-1),
+		status(B_OK)
+	{
+	}
+
+	~LoginSessionContext()
+	{
+		delete request;
+	}
+
+	BMessenger	daemon;
+	BMessage*	request;
+	uid_t		loginUser;
+	status_t	status;
+};
+
+
+//! Terminates all teams in a graphical login session.
+static void
+terminate_session(team_id sessionTeam)
+{
+	int32 cookie = 0;
+	team_info info;
+	while (get_next_team_info(&cookie, &info) == B_OK) {
+		if (info.session_id == sessionTeam)
+			send_signal(info.team, SIGTERM);
+	}
+
+	for (int32 attempt = 0; attempt < 40; attempt++) {
+		bool found = false;
+		cookie = 0;
+		while (get_next_team_info(&cookie, &info) == B_OK) {
+			if (info.session_id == sessionTeam) {
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			break;
+		snooze(50000);
+	}
+
+	cookie = 0;
+	while (get_next_team_info(&cookie, &info) == B_OK) {
+		if (info.session_id == sessionTeam)
+			kill_team(info.team);
+	}
+}
+
+
+static bool
+is_login_application(team_id team)
+{
+	int32 cookie = 0;
+	image_info info;
+	while (get_next_image_info(team, &cookie, &info) == B_OK) {
+		if (info.type != B_APP_IMAGE)
+			continue;
+
+		return strcmp(info.name, "/boot/system/apps/Login") == 0
+			|| strcmp(info.name, "/system/apps/Login") == 0;
+	}
+
+	return false;
+}
+
+
+static bool
+get_caller_team_info(BMessage* message, uid_t requestedUser,
+	team_info& callerInfo)
+{
+	team_id callerTeam = message->ReturnAddress().Team();
+	return callerTeam >= 0 && get_team_info(callerTeam, &callerInfo) == B_OK
+		&& callerInfo.uid == requestedUser;
+}
 
 
 class Session {
@@ -171,6 +280,19 @@ private:
 			void				_HandleEnableLaunchJob(BMessage* message);
 			void				_HandleStopLaunchJob(BMessage* message);
 			void				_HandleLaunchSession(BMessage* message);
+			void				_HandleLaunchLoginSession(BMessage* message);
+			void				_HandleSwitchSession(BMessage* message);
+			void				_HandleLogoutSession(BMessage* message);
+			void				_HandleLockSession(BMessage* message);
+			void				_HandleLaunchInDisplaySession(
+									BMessage* message);
+			void				_HandleGetDisplaySession(BMessage* message);
+			status_t			_ActivateDesktop(uid_t user,
+									bool create = false,
+									team_id session = -1);
+			status_t			_SwitchToSession(const char* login);
+			status_t			_AppServerMessenger(BMessenger& messenger);
+			void				_EndLoginSession();
 			void				_HandleRegisterSessionDaemon(BMessage* message);
 			void				_HandleRegisterLaunchEvent(BMessage* message);
 			void				_HandleUnregisterLaunchEvent(BMessage* message);
@@ -225,12 +347,16 @@ private:
 			void				_ForwardEventMessage(uid_t user,
 									BMessage* message);
 
-			status_t			_StartSession(const char* login);
+			status_t			_StartSession(const char* login,
+									bool loginSession = false);
+	static	int32				_SessionSwitchEntry(void* data);
+	static	int32				_EndSessionEntry(void* data);
+	static	int32				_LoginSessionResolveEntry(void* data);
 
 			void				_RetrieveKernelOptions();
 			void				_SetupEnvironment();
 			void				_InitSystem();
-			void				_AddInitJob(BJob* job);
+			void				_AddInitJob(BJob* job, BJob* after = NULL);
 
 private:
 			Log					fLog;
@@ -240,6 +366,8 @@ private:
 			EventMap			fEvents;
 			JobQueue			fJobQueue;
 			SessionMap			fSessions;
+			Session*			fDisplaySession;
+			SessionMap			fSessionsWithoutDesktop;
 			MainWorker*			fMainWorker;
 			Target*				fInitTarget;
 			TeamMap				fTeams;
@@ -247,6 +375,7 @@ private:
 			bool				fSafeMode;
 			bool				fReadOnlyBootVolume;
 			bool				fUserMode;
+			bool				fSwitchInProgress;
 };
 
 
@@ -360,12 +489,14 @@ LaunchDaemon::LaunchDaemon(bool userMode, status_t& error)
 	BServer(kLaunchDaemonSignature, NULL,
 		create_port(B_LOOPER_PORT_DEFAULT_CAPACITY,
 			userMode ? "AppPort" : B_LAUNCH_DAEMON_PORT_NAME), false, &error),
+	fDisplaySession(NULL),
 	fInitTarget(userMode ? NULL : new Target("init")),
 #ifdef TEST_MODE
-	fUserMode(true)
+	fUserMode(true),
 #else
-	fUserMode(userMode)
+	fUserMode(userMode),
 #endif
+	fSwitchInProgress(false)
 {
 	mutex_init(&fTeamsLock, "teams lock");
 
@@ -383,6 +514,10 @@ LaunchDaemon::LaunchDaemon(bool userMode, status_t& error)
 
 LaunchDaemon::~LaunchDaemon()
 {
+	for (SessionMap::iterator iterator = fSessions.begin();
+			iterator != fSessions.end(); iterator++) {
+		delete iterator->second;
+	}
 }
 
 
@@ -485,6 +620,19 @@ LaunchDaemon::TeamLaunched(Job* job, status_t status)
 {
 	fLog.JobLaunched(job, status);
 
+	if (status == B_OK && !fSessionsWithoutDesktop.empty() && job != NULL
+		&& strcasecmp(job->Name(), get_leaf(kAppServerSignature)) == 0) {
+		SessionMap sessions;
+		sessions.swap(fSessionsWithoutDesktop);
+
+		for (SessionMap::iterator iterator = sessions.begin();
+				iterator != sessions.end(); iterator++) {
+			Session* session = iterator->second;
+			_ActivateDesktop(session->User(), true,
+				session->Daemon().Team());
+		}
+	}
+
 	MutexLocker locker(fTeamsLock);
 	fTeams.insert(std::make_pair(job->Team(), job));
 }
@@ -565,6 +713,20 @@ LaunchDaemon::MessageReceived(BMessage* message)
 			team_id team = (team_id)message->GetInt32("team", -1);
 			if (opcode != B_TEAM_DELETED || team < 0)
 				break;
+
+			if (!fUserMode) {
+				for (SessionMap::iterator iterator = fSessions.begin();
+						iterator != fSessions.end(); iterator++) {
+					if (iterator->second->Daemon().Team() == team) {
+						if (fDisplaySession == iterator->second)
+							fDisplaySession = NULL;
+						fSessionsWithoutDesktop.erase(iterator->first);
+						delete iterator->second;
+						fSessions.erase(iterator);
+						break;
+					}
+				}
+			}
 
 			MutexLocker locker(fTeamsLock);
 
@@ -652,6 +814,25 @@ LaunchDaemon::MessageReceived(BMessage* message)
 		case B_LAUNCH_SESSION:
 			_HandleLaunchSession(message);
 			break;
+		case B_LAUNCH_LOGIN_SESSION:
+			_HandleLaunchLoginSession(message);
+			break;
+		case B_SWITCH_SESSION:
+			_HandleSwitchSession(message);
+			break;
+		case B_LOGOUT_SESSION:
+			_HandleLogoutSession(message);
+			break;
+
+		case B_LOCK_SESSION:
+			_HandleLockSession(message);
+			break;
+		case B_LAUNCH_IN_DISPLAY_SESSION:
+			_HandleLaunchInDisplaySession(message);
+			break;
+		case B_GET_DISPLAY_SESSION:
+			_HandleGetDisplaySession(message);
+			break;
 		case B_REGISTER_SESSION_DAEMON:
 			_HandleRegisterSessionDaemon(message);
 			break;
@@ -711,6 +892,38 @@ LaunchDaemon::MessageReceived(BMessage* message)
 			}
 			break;
 		}
+		case kMsgContinueSessionSwitch:
+		{
+			const char* login = message->GetString("login");
+			status_t status = login != NULL
+				? _SwitchToSession(login) : B_BAD_VALUE;
+			if (status != B_OK) {
+				debug_printf("Could not start session for %s: %s\n",
+					login != NULL ? login : "<unknown>", strerror(status));
+			}
+			fSwitchInProgress = false;
+			break;
+		}
+		case kMsgContinueLoginSession:
+		{
+			LoginSessionContext* context = NULL;
+			if (message->FindPointer("context", (void**)&context) != B_OK
+				|| context == NULL) {
+				break;
+			}
+
+			// Session state is only changed on the looper thread.
+			status_t status = context->status;
+			if (status == B_OK && FindSession(context->loginUser) != NULL)
+				status = B_ALREADY_RUNNING;
+			if (status == B_OK)
+				status = _StartSession(kLoginServiceUser, true);
+
+			BMessage reply((uint32)status);
+			context->request->SendReply(&reply);
+			delete context;
+			break;
+		}
 
 		default:
 			BServer::MessageReceived(message);
@@ -732,10 +945,16 @@ LaunchDaemon::_HandleGetLaunchData(BMessage* message)
 	Job* job = FindJob(get_leaf(message->GetString("name")));
 	if (job == NULL) {
 		Session* session = FindSession(user);
+		if (session == NULL && user == 0) {
+			// System services use the front session's user jobs.
+			session = fDisplaySession;
+		}
 		if (session != NULL) {
 			// Forward request to user launch_daemon
-			if (session->Daemon().SendMessage(message) == B_OK)
+			if (session->Daemon().SendMessage(message,
+					message->ReturnAddress()) == B_OK) {
 				return;
+			}
 		}
 		reply.what = B_NAME_NOT_FOUND;
 	} else if (job->IsService() && !job->IsLaunched()) {
@@ -815,8 +1034,10 @@ LaunchDaemon::_HandleLaunchTarget(BMessage* message)
 		Session* session = FindSession(user);
 		if (session != NULL) {
 			// Forward request to user launch_daemon
-			if (session->Daemon().SendMessage(message) == B_OK)
+			if (session->Daemon().SendMessage(message,
+					message->ReturnAddress()) == B_OK) {
 				return;
+			}
 		}
 
 		BMessage reply(B_NAME_NOT_FOUND);
@@ -849,8 +1070,10 @@ LaunchDaemon::_HandleStopLaunchTarget(BMessage* message)
 		Session* session = FindSession(user);
 		if (session != NULL) {
 			// Forward request to user launch_daemon
-			if (session->Daemon().SendMessage(message) == B_OK)
+			if (session->Daemon().SendMessage(message,
+					message->ReturnAddress()) == B_OK) {
 				return;
+			}
 		}
 
 		BMessage reply(B_NAME_NOT_FOUND);
@@ -885,8 +1108,10 @@ LaunchDaemon::_HandleLaunchJob(BMessage* message)
 		Session* session = FindSession(user);
 		if (session != NULL) {
 			// Forward request to user launch_daemon
-			if (session->Daemon().SendMessage(message) == B_OK)
+			if (session->Daemon().SendMessage(message,
+					message->ReturnAddress()) == B_OK) {
 				return;
+			}
 		}
 
 		BMessage reply(B_NAME_NOT_FOUND);
@@ -917,8 +1142,10 @@ LaunchDaemon::_HandleEnableLaunchJob(BMessage* message)
 		Session* session = FindSession(user);
 		if (session != NULL) {
 			// Forward request to user launch_daemon
-			if (session->Daemon().SendMessage(message) == B_OK)
+			if (session->Daemon().SendMessage(message,
+					message->ReturnAddress()) == B_OK) {
 				return;
+			}
 		}
 
 		BMessage reply(B_NAME_NOT_FOUND);
@@ -948,8 +1175,10 @@ LaunchDaemon::_HandleStopLaunchJob(BMessage* message)
 		Session* session = FindSession(user);
 		if (session != NULL) {
 			// Forward request to user launch_daemon
-			if (session->Daemon().SendMessage(message) == B_OK)
+			if (session->Daemon().SendMessage(message,
+					message->ReturnAddress()) == B_OK) {
 				return;
+			}
 		}
 
 		BMessage reply(B_NAME_NOT_FOUND);
@@ -977,13 +1206,394 @@ LaunchDaemon::_HandleLaunchSession(BMessage* message)
 	const char* login = message->GetString("login");
 	if (login == NULL)
 		status = B_BAD_VALUE;
-	if (status == B_OK && user != 0) {
+	team_info callerInfo;
+	if (status == B_OK && (fUserMode || user != 0
+			|| !get_caller_team_info(message, user, callerInfo))) {
 		// Only the root user can start sessions
-		// TODO: we'd actually need to know the uid of the sender
 		status = B_PERMISSION_DENIED;
 	}
 	if (status == B_OK)
 		status = _StartSession(login);
+
+	BMessage reply((uint32)status);
+	message->SendReply(&reply);
+}
+
+
+void
+LaunchDaemon::_HandleLaunchLoginSession(BMessage* message)
+{
+	uid_t user = _GetUserID(message);
+	if (user < 0)
+		return;
+
+	status_t status = B_OK;
+	team_info callerInfo;
+	if (fUserMode || user != 0
+		|| !get_caller_team_info(message, user, callerInfo)) {
+		status = B_PERMISSION_DENIED;
+	}
+
+	// Avoid blocking this looper while the registrar starts.
+	LoginSessionContext* context = status == B_OK
+		? new(std::nothrow) LoginSessionContext : NULL;
+	if (status == B_OK && context == NULL)
+		status = B_NO_MEMORY;
+
+	thread_id thread = -1;
+	if (status == B_OK) {
+		context->daemon = BMessenger(this);
+		thread = spawn_thread(&_LoginSessionResolveEntry,
+			"resolve login session", B_NORMAL_PRIORITY, context);
+		if (thread < 0) {
+			status = thread;
+			delete context;
+		}
+	}
+
+	if (status == B_OK) {
+		// Keep the request until the helper finishes.
+		context->request = DetachCurrentMessage();
+		resume_thread(thread);
+		return;
+	}
+
+	BMessage reply((uint32)status);
+	message->SendReply(&reply);
+}
+
+
+int32
+LaunchDaemon::_LoginSessionResolveEntry(void* data)
+{
+	LoginSessionContext* context = static_cast<LoginSessionContext*>(data);
+
+	// The registrar may still be loading the user database at boot.
+	struct passwd* loginService = NULL;
+	for (int32 attempt = 0; attempt < 100; attempt++) {
+		loginService = getpwnam(kLoginServiceUser);
+		if (loginService != NULL)
+			break;
+		snooze(100000);
+	}
+
+	if (loginService != NULL)
+		context->loginUser = loginService->pw_uid;
+	else
+		context->status = B_NAME_NOT_FOUND;
+
+	BMessage message(kMsgContinueLoginSession);
+	message.AddPointer("context", context);
+	if (context->daemon.SendMessage(&message) != B_OK) {
+		delete context;
+	}
+
+	return 0;
+}
+
+
+//! Addresses app_server directly to avoid recursing through this daemon.
+status_t
+LaunchDaemon::_AppServerMessenger(BMessenger& messenger)
+{
+	Job* job = FindJob(get_leaf(kAppServerSignature));
+	port_id port = job != NULL ? job->DefaultPort() : B_NAME_NOT_FOUND;
+	if (port < 0 || job->Team() < 0)
+		return B_NAME_NOT_FOUND;
+
+	BMessenger::Private(messenger).SetTo(job->Team(), port, B_PREFERRED_TOKEN);
+	return B_OK;
+}
+
+
+status_t
+LaunchDaemon::_ActivateDesktop(uid_t user, bool create, team_id session)
+{
+	BMessenger appServer;
+	if (_AppServerMessenger(appServer) != B_OK) {
+		return B_NAME_NOT_FOUND;
+	}
+
+	BMessage request(AS_ACTIVATE_DESKTOP);
+	status_t status = request.AddInt32("user", (int32)user);
+	if (status == B_OK)
+		status = request.AddBool("create", create);
+	if (status == B_OK)
+		status = request.AddInt32("session", (int32)session);
+	if (status != B_OK)
+		return status;
+
+	// Waiting here would deadlock when app_server asks this daemon for services.
+	status = appServer.SendMessage(&request, this);
+	if (status != B_OK) {
+		debug_printf("launch_daemon: could not ask for the desktop of user "
+			"%d: %s\n", (int)user, strerror(status));
+	}
+
+	return status;
+}
+
+
+//! Brings an existing session forward, or starts it.
+status_t
+LaunchDaemon::_SwitchToSession(const char* login)
+{
+	struct passwd* passwd = getpwnam(login);
+	if (passwd == NULL)
+		return B_NAME_NOT_FOUND;
+
+	Session* session = FindSession(passwd->pw_uid);
+	if (session != NULL) {
+		status_t status = _ActivateDesktop(passwd->pw_uid, false,
+			session->Daemon().Team());
+		if (status == B_OK) {
+			fDisplaySession = session;
+			_EndLoginSession();
+		}
+		return status;
+	}
+
+	return _StartSession(login, strcmp(login, kLoginServiceUser) == 0);
+}
+
+
+//! Tears down the greeter after another session takes the display.
+void
+LaunchDaemon::_EndLoginSession()
+{
+	struct passwd* loginService = getpwnam(kLoginServiceUser);
+	if (loginService == NULL)
+		return;
+
+	SessionMap::iterator found = fSessions.find(loginService->pw_uid);
+	if (found == fSessions.end())
+		return;
+
+	Session* session = found->second;
+	if (session == fDisplaySession)
+		return;
+
+	EndSessionContext* context = new(std::nothrow) EndSessionContext;
+	if (context == NULL)
+		return;
+
+	context->daemon = BMessenger(this);
+	context->sessionTeam = session->Daemon().Team();
+	if (_AppServerMessenger(context->appServer) != B_OK) {
+		delete context;
+		return;
+	}
+
+	fSessionsWithoutDesktop.erase(found->first);
+	fSessions.erase(found);
+	delete session;
+
+	thread_id thread = spawn_thread(&_EndSessionEntry, "end login session",
+		B_NORMAL_PRIORITY, context);
+	if (thread < 0) {
+		delete context;
+		return;
+	}
+
+	resume_thread(thread);
+}
+
+
+void
+LaunchDaemon::_HandleSwitchSession(BMessage* message)
+{
+	uid_t user = _GetUserID(message);
+	if (user < 0)
+		return;
+
+	status_t status = B_OK;
+	if (fUserMode || fSwitchInProgress)
+		status = fUserMode ? B_NOT_ALLOWED : B_BUSY;
+
+	// The request UID is routing data; authorize with kernel credentials.
+	team_info callerInfo;
+	if (status == B_OK && (!get_caller_team_info(message, user, callerInfo)
+			|| !is_login_application(callerInfo.team))) {
+		status = B_PERMISSION_DENIED;
+	}
+	struct passwd* loginService = getpwnam(kLoginServiceUser);
+	if (status == B_OK && (loginService == NULL
+			|| user != loginService->pw_uid)) {
+		status = B_PERMISSION_DENIED;
+	}
+
+	const char* login = message->GetString("login");
+	const char* password = message->GetString("password");
+	if (status == B_OK && (login == NULL || password == NULL))
+		status = B_BAD_VALUE;
+	if (status == B_OK)
+		status = authenticate_user(login, password);
+
+	if (status == B_OK)
+		status = _SwitchToSession(login);
+
+	BMessage reply((uint32)status);
+	message->SendReply(&reply);
+}
+
+
+void
+LaunchDaemon::_HandleGetDisplaySession(BMessage* message)
+{
+	uid_t user = _GetUserID(message);
+	if (user < 0)
+		return;
+
+	status_t status = fUserMode ? B_NOT_ALLOWED : B_OK;
+
+	team_info callerInfo;
+	if (status == B_OK && (!get_caller_team_info(message, user, callerInfo)
+			|| user != 0)) {
+		status = B_PERMISSION_DENIED;
+	}
+	if (status == B_OK && fDisplaySession == NULL)
+		status = B_NAME_NOT_FOUND;
+
+	BMessage reply((uint32)status);
+	if (status == B_OK)
+		reply.AddInt32("display user", (int32)fDisplaySession->User());
+
+	message->SendReply(&reply);
+}
+
+
+//! Routes a privileged service's launch through the front session daemon.
+void
+LaunchDaemon::_HandleLaunchInDisplaySession(BMessage* message)
+{
+	uid_t user = _GetUserID(message);
+	if (user < 0)
+		return;
+
+	status_t status = B_OK;
+	team_info callerInfo;
+	const char* program = message->GetString("program");
+	if (program == NULL)
+		status = B_BAD_VALUE;
+
+	if (fUserMode) {
+		if (status == B_OK
+			&& (!get_caller_team_info(message, 0, callerInfo)
+				|| callerInfo.team != getppid() || user != getuid())) {
+			status = B_PERMISSION_DENIED;
+		}
+		if (status == B_OK) {
+			const char* argv[] = { program, NULL };
+			pid_t pid = -1;
+			status = posix_spawn(&pid, program, NULL, NULL,
+				(char* const*)argv, environ);
+		}
+	} else if (status == B_OK) {
+		if (!get_caller_team_info(message, user, callerInfo) || user != 0)
+			status = B_PERMISSION_DENIED;
+		if (status == B_OK && fDisplaySession == NULL)
+			status = B_NAME_NOT_FOUND;
+
+		BMessage reply;
+		BMessage request(B_LAUNCH_IN_DISPLAY_SESSION);
+		if (status == B_OK)
+			status = request.AddInt32("user", fDisplaySession->User());
+		if (status == B_OK)
+			status = request.AddString("program", program);
+		if (status == B_OK)
+			status = fDisplaySession->Daemon().SendMessage(&request, &reply);
+		if (status == B_OK)
+			status = reply.what;
+	}
+
+	BMessage reply((uint32)status);
+	message->SendReply(&reply);
+}
+
+
+void
+LaunchDaemon::_HandleLockSession(BMessage* message)
+{
+	uid_t user = _GetUserID(message);
+	if (user < 0)
+		return;
+
+	status_t status = fUserMode ? B_NOT_ALLOWED : B_OK;
+
+	team_info callerInfo;
+	if (status == B_OK && !get_caller_team_info(message, user, callerInfo))
+		status = B_PERMISSION_DENIED;
+
+	struct passwd* loginService = status == B_OK
+		? getpwnam(kLoginServiceUser) : NULL;
+	if (status == B_OK && loginService == NULL)
+		status = B_NOT_ALLOWED;
+	if (status == B_OK && user == loginService->pw_uid) {
+		status = B_OK;
+	} else if (status == B_OK)
+		status = _SwitchToSession(kLoginServiceUser);
+
+	BMessage reply((uint32)status);
+	message->SendReply(&reply);
+}
+
+
+void
+LaunchDaemon::_HandleLogoutSession(BMessage* message)
+{
+	uid_t user = _GetUserID(message);
+	if (user < 0)
+		return;
+
+	status_t status = B_OK;
+	if (fUserMode || fSwitchInProgress)
+		status = fUserMode ? B_NOT_ALLOWED : B_BUSY;
+
+	// A session may only log itself out.
+	team_info callerInfo;
+	if (status == B_OK && !get_caller_team_info(message, user, callerInfo))
+		status = B_PERMISSION_DENIED;
+
+	struct passwd* loginService = status == B_OK
+		? getpwnam(kLoginServiceUser) : NULL;
+	if (status == B_OK && (loginService == NULL
+			|| user == loginService->pw_uid)) {
+		status = B_NOT_ALLOWED;
+	}
+
+	Session* session = status == B_OK ? FindSession(user) : NULL;
+	if (status == B_OK && session == NULL)
+		status = B_NAME_NOT_FOUND;
+
+	SessionSwitchContext* context = NULL;
+	thread_id thread = -1;
+	if (status == B_OK) {
+		context = new(std::nothrow) SessionSwitchContext;
+		if (context == NULL) {
+			status = B_NO_MEMORY;
+		} else {
+			context->daemon = BMessenger(this);
+			context->sessionTeam = session->Daemon().Team();
+			context->login = kLoginServiceUser;
+			status = _AppServerMessenger(context->appServer);
+			if (status != B_OK) {
+				delete context;
+				context = NULL;
+			}
+		}
+		if (status == B_OK) {
+			thread = spawn_thread(&_SessionSwitchEntry, "logout user session",
+				B_NORMAL_PRIORITY, context);
+			if (thread < 0)
+				status = thread;
+		}
+	}
+
+	if (status == B_OK) {
+		fSwitchInProgress = true;
+		resume_thread(thread);
+	} else
+		delete context;
 
 	BMessage reply((uint32)status);
 	message->SendReply(&reply);
@@ -1002,12 +1612,31 @@ LaunchDaemon::_HandleRegisterSessionDaemon(BMessage* message)
 	BMessenger target;
 	if (message->FindMessenger("daemon", &target) != B_OK)
 		status = B_BAD_VALUE;
+	team_info callerInfo;
+	if (status == B_OK && (fUserMode
+			|| !get_caller_team_info(message, user, callerInfo)
+			|| target.Team() != callerInfo.team)) {
+		status = B_PERMISSION_DENIED;
+	}
 
 	if (status == B_OK) {
+		SessionMap::iterator found = fSessions.find(user);
+		if (found != fSessions.end()) {
+			if (fDisplaySession == found->second)
+				fDisplaySession = NULL;
+			delete found->second;
+			fSessions.erase(found);
+		}
+
 		Session* session = new (std::nothrow) Session(user, target);
-		if (session != NULL)
+		if (session != NULL) {
 			fSessions.insert(std::make_pair(user, session));
-		else
+			fDisplaySession = session;
+			if (_ActivateDesktop(user, true, target.Team()) != B_OK)
+				fSessionsWithoutDesktop.insert(std::make_pair(user, session));
+
+			_EndLoginSession();
+		} else
 			status = B_NO_MEMORY;
 
 		// Send registration messages for all already-known events.
@@ -1621,6 +2250,10 @@ LaunchDaemon::_AddJob(Target* target, bool service, BMessage& message)
 	if (message.HasString("launch"))
 		message.FindStrings("launch", &job->Arguments());
 
+	BString user;
+	if (message.FindString("user", &user) == B_OK)
+		job->SetUserName(user.String());
+
 	const char* requirement;
 	for (int32 index = 0;
 			message.FindString("requires", index, &requirement) == B_OK;
@@ -2011,7 +2644,7 @@ LaunchDaemon::_ForwardEventMessage(uid_t user, BMessage* message)
 
 
 status_t
-LaunchDaemon::_StartSession(const char* login)
+LaunchDaemon::_StartSession(const char* login, bool loginSession)
 {
 	char path[B_PATH_NAME_LENGTH];
 	status_t status = get_app_path(path);
@@ -2019,12 +2652,47 @@ LaunchDaemon::_StartSession(const char* login)
 		return status;
 
 	pid_t pid = -1;
-	const char* argv[] = {path, login, NULL};
+	const char* argv[] = {path, loginSession ? "--login-session" : login,
+		loginSession ? login : NULL, NULL};
 	status = posix_spawn(&pid, path, NULL, NULL, (char* const*)argv, environ);
 	if (status != B_OK)
 		return status;
 
 	return B_OK;
+}
+
+
+int32
+LaunchDaemon::_EndSessionEntry(void* data)
+{
+	EndSessionContext* context = static_cast<EndSessionContext*>(data);
+
+	terminate_session(context->sessionTeam);
+
+	BMessage request(AS_CLOSE_DESKTOP);
+	if (request.AddInt32("session", (int32)context->sessionTeam) == B_OK)
+		context->appServer.SendMessage(&request, context->daemon);
+
+	delete context;
+	return 0;
+}
+
+
+int32
+LaunchDaemon::_SessionSwitchEntry(void* data)
+{
+	SessionSwitchContext* context = static_cast<SessionSwitchContext*>(data);
+
+	terminate_session(context->sessionTeam);
+	BMessage closeDesktop(AS_CLOSE_DESKTOP);
+	if (closeDesktop.AddInt32("session", context->sessionTeam) == B_OK)
+		context->appServer.SendMessage(&closeDesktop, context->daemon);
+
+	BMessage message(kMsgContinueSessionSwitch);
+	message.AddString("login", context->login);
+	context->daemon.SendMessage(&message);
+	delete context;
+	return 0;
 }
 
 
@@ -2059,7 +2727,9 @@ void
 LaunchDaemon::_InitSystem()
 {
 #ifndef TEST_MODE
-	_AddInitJob(new InitRealTimeClockJob());
+	InitHomeLayoutJob* homeLayoutJob = new InitHomeLayoutJob();
+	_AddInitJob(homeLayoutJob);
+	_AddInitJob(new InitRealTimeClockJob(), homeLayoutJob);
 	_AddInitJob(new InitSharedMemoryDirectoryJob());
 	_AddInitJob(new InitTemporaryDirectoryJob());
 #endif
@@ -2069,8 +2739,10 @@ LaunchDaemon::_InitSystem()
 
 
 void
-LaunchDaemon::_AddInitJob(BJob* job)
+LaunchDaemon::_AddInitJob(BJob* job, BJob* after)
 {
+	if (after != NULL)
+		job->AddDependency(after);
 	fInitTarget->AddDependency(job);
 	fJobQueue.AddJob(job);
 }
@@ -2101,7 +2773,7 @@ open_stdio(int targetFD, int openMode)
 
 
 static int
-user_main(const char* login)
+user_main(const char* login, bool loginSession)
 {
 	struct passwd* passwd = getpwnam(login);
 	if (passwd == NULL)
@@ -2112,6 +2784,40 @@ user_main(const char* login)
 	// Check if there is a user session running already
 	uid_t user = passwd->pw_uid;
 	gid_t group = passwd->pw_gid;
+	if (loginSession) {
+		// Fix ownership before dropping privileges.
+		static const char* const kDirectories[] = {
+			"", "config", "config/cache", "config/settings", "config/var"
+		};
+		for (size_t i = 0; i < sizeof(kDirectories) / sizeof(kDirectories[0]);
+				i++) {
+			BPath path(passwd->pw_dir);
+			status_t status = path.InitCheck();
+			if (status == B_OK && kDirectories[i][0] != '\0')
+				status = path.Append(kDirectories[i]);
+			if (status == B_OK)
+				status = create_directory(path.Path(), 0700);
+			if (status != B_OK)
+				return status;
+			if (chown(path.Path(), user, group) != 0
+				|| chmod(path.Path(), 0700) != 0) {
+				return errno;
+			}
+		}
+		setenv("HAIKU_LOGIN_SESSION", "1", true);
+	} else
+		unsetenv("HAIKU_LOGIN_SESSION");
+
+	if (passwd->pw_dir != NULL && passwd->pw_dir[0] != '\0') {
+		struct stat st;
+		if (stat(passwd->pw_dir, &st) != 0) {
+			status_t status = create_user_home(passwd->pw_dir, user, group);
+			if (status != B_OK) {
+				debug_printf("launch_daemon: could not create the home %s of "
+					"%s: %s\n", passwd->pw_dir, login, strerror(status));
+			}
+		}
+	}
 
 	if (setsid() < 0)
 		exit(EXIT_FAILURE);
@@ -2147,7 +2853,11 @@ int
 main(int argc, char* argv[])
 {
 	if (argc == 2 && geteuid() == 0)
-		return user_main(argv[1]);
+		return user_main(argv[1], false);
+	if (argc == 3 && strcmp(argv[1], "--login-session") == 0
+		&& geteuid() == 0) {
+		return user_main(argv[2], true);
+	}
 
 	if (find_port(B_LAUNCH_DAEMON_PORT_NAME) >= 0) {
 		fprintf(stderr, "The launch_daemon is already running!\n");

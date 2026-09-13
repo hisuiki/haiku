@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <AboutWindow.h>
 #include <Alert.h>
@@ -889,23 +890,29 @@ thread_popup(void *arg)
 	get_system_info(&systemInfo);
 	info_pack* infos = new info_pack[systemInfo.used_teams];
 	// TODO: this doesn't necessarily get all teams
-	for (m = 0, mcookie = 0; m < systemInfo.used_teams; m++) {
+	unsigned long teamCapacity = systemInfo.used_teams;
+	for (m = 0, mcookie = 0; m < teamCapacity;) {
+		team_info teamInfo;
+		if (get_next_team_info(&mcookie, &teamInfo) != B_OK)
+			break;
+		if (!is_team_visible(teamInfo))
+			continue;
+
 		infos[m].team_icon = NULL;
 		infos[m].team_name[0] = 0;
 		infos[m].thread_info = NULL;
-		if (get_next_team_info(&mcookie, &infos[m].team_info) == B_OK) {
-			infos[m].thread_info = new thread_info[infos[m].team_info.thread_count];
-			for (h = 0, hcookie = 0; h < infos[m].team_info.thread_count; h++) {
-				if (get_next_thread_info(infos[m].team_info.team, &hcookie,
-						&infos[m].thread_info[h]) != B_OK)
-					infos[m].thread_info[h].thread = -1;
+		infos[m].team_info = teamInfo;
+		infos[m].thread_info = new thread_info[teamInfo.thread_count];
+		for (h = 0, hcookie = 0; h < teamInfo.thread_count; h++) {
+			if (get_next_thread_info(teamInfo.team, &hcookie,
+					&infos[m].thread_info[h]) != B_OK) {
+				infos[m].thread_info[h].thread = -1;
 			}
-			get_team_name_and_icon(infos[m], true);
-		} else {
-			systemInfo.used_teams = m;
-			infos[m].team_info.team = -1;
 		}
+		get_team_name_and_icon(infos[m], true);
+		m++;
 	}
+	systemInfo.used_teams = m;
 
 	BPopUpMenu* popup = new BPopUpMenu("Global Popup", false, false);
 	popup->SetFont(be_plain_font);
@@ -967,7 +974,7 @@ thread_popup(void *arg)
 	addtopbottom(new BSeparatorItem());
 
 	// CPU on/off section
-	if (gCPUcount > 1) {
+	if (geteuid() == 0 && gCPUcount > 1) {
 		for (unsigned int i = 0; i < gCPUcount; i++) {
 			BString itemName;
 			itemName.SetToFormat(B_TRANSLATE("Processor %d"), i + 1);
@@ -982,13 +989,16 @@ thread_popup(void *arg)
 		addtopbottom(new BSeparatorItem());
 	}
 
-	// Scheduler modes
-	BMessage* msg = new BMessage('Schd');
-	item = new BMenuItem(B_TRANSLATE("Power saving"), msg);
-	item->SetMarked((uint32)get_scheduler_mode() == SCHEDULER_MODE_POWER_SAVING);
-	item->SetTarget(gPCView);
-	addtopbottom(item);
-	addtopbottom(new BSeparatorItem());
+	// Scheduler modes are a system-wide control.
+	if (geteuid() == 0) {
+		BMessage* msg = new BMessage('Schd');
+		item = new BMenuItem(B_TRANSLATE("Power saving"), msg);
+		item->SetMarked((uint32)get_scheduler_mode()
+			== SCHEDULER_MODE_POWER_SAVING);
+		item->SetTarget(gPCView);
+		addtopbottom(item);
+		addtopbottom(new BSeparatorItem());
+	}
 
 	if (!be_roster->IsRunning(kTrackerSig)) {
 		item = new IconMenuItem(gPCView->fTrackerIcon,
