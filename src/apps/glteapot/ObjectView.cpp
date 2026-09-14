@@ -21,6 +21,7 @@
 #include <Application.h>
 #include <Catalog.h>
 #include <Cursor.h>
+#include <Dragger.h>
 #include <InterfaceKit.h>
 #include <FindDirectory.h>
 
@@ -48,6 +49,33 @@ float dimGreen[3] = {0.0, 0.5, 0.0};
 float red[3] = {1.0, 0.0, 0.0};
 
 float* bgColor = black;
+
+
+static BRect
+ArchiveFrame(BMessage* archive)
+{
+	BRect frame(0, 0, 319, 239);
+	archive->FindRect("_frame", &frame);
+	return frame;
+}
+
+
+static const char*
+ArchiveName(BMessage* archive)
+{
+	const char* name = "objectView";
+	archive->FindString("_name", &name);
+	return name;
+}
+
+
+static uint32
+ArchiveResizingMode(BMessage* archive)
+{
+	int32 mode = B_FOLLOW_ALL_SIDES;
+	archive->FindInt32("_resize_mode", &mode);
+	return mode;
+}
 
 const char *kNoResourceError = B_TRANSLATE("The Teapot 3D model was "
 									"not found in application resources. "
@@ -160,6 +188,50 @@ ObjectView::ObjectView(BRect rect, const char *name, ulong resizingMode,
 	fLastYXRatio(1),
 	fYxRatio(1)
 {
+	_Init();
+
+	BRect draggerFrame(Bounds());
+	draggerFrame.left = draggerFrame.right - 7;
+	draggerFrame.top = draggerFrame.bottom - 7;
+	AddChild(new BDragger(draggerFrame, this,
+		B_FOLLOW_RIGHT | B_FOLLOW_BOTTOM));
+}
+
+
+ObjectView::ObjectView(BMessage* archive)
+	: BGLView(ArchiveFrame(archive), ArchiveName(archive),
+		ArchiveResizingMode(archive), 0, BGL_RGB | BGL_DEPTH | BGL_DOUBLE),
+	fHistEntries(0),
+	fOldestEntry(0),
+	fFps(true),
+	fLimitFps(true),
+	fLastGouraud(true),
+	fGouraud(true),
+	fLastZbuf(true),
+	fZbuf(true),
+	fLastCulling(true),
+	fCulling(true),
+	fLastLighting(true),
+	fLighting(true),
+	fLastFilled(true),
+	fFilled(true),
+	fLastPersp(false),
+	fPersp(false),
+	fLastTextured(false),
+	fTextured(false),
+	fLastFog(false),
+	fFog(false),
+	fForceRedraw(false),
+	fLastYXRatio(1),
+	fYxRatio(1)
+{
+	_Init();
+}
+
+
+void
+ObjectView::_Init()
+{
 	fTrackingInfo.isTracking = false;
 	fTrackingInfo.pickedObject = NULL;
 	fTrackingInfo.buttons = 0;
@@ -185,6 +257,28 @@ ObjectView::ObjectView(BRect rect, const char *name, ulong resizingMode,
 		NoResourceAlert->Go();
 		delete Tri;
 	}
+}
+
+
+/*static*/ ObjectView*
+ObjectView::Instantiate(BMessage* archive)
+{
+	if (!validate_instantiation(archive, "ObjectView"))
+		return NULL;
+
+	return new ObjectView(archive);
+}
+
+
+status_t
+ObjectView::Archive(BMessage* archive, bool deep) const
+{
+	status_t status = BGLView::Archive(archive, deep);
+	if (status == B_OK)
+		status = archive->AddString("add_on", "application/x-vnd.Haiku-GLTeapot");
+	if (status == B_OK)
+		status = archive->AddString("class", "ObjectView");
+	return status;
 }
 
 

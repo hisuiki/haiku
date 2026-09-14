@@ -56,7 +56,10 @@ class ObjectView : public BGLView {
 	public:
 						ObjectView(BRect rect, const char* name,
 							ulong resizingMode, ulong options);
+						ObjectView(BMessage* archive);
 						~ObjectView();
+		static	_EXPORT ObjectView* Instantiate(BMessage* archive);
+		virtual	status_t	Archive(BMessage* archive, bool deep = true) const;
 
 		virtual	void	MouseDown(BPoint point);
 		virtual	void	MouseUp(BPoint point);
@@ -78,6 +81,7 @@ class ObjectView : public BGLView {
 		sem_id			quittingSem;
 
 	private:
+			void			_Init();
 		thread_id		fDrawThread;
 		ResScroll*		fResScroll;
 		BList			fObjects;

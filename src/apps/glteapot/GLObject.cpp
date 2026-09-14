@@ -216,9 +216,14 @@ TriangleObject::TriangleObject(ObjectView* ov)
 		fTriangles(100, 100),
 		fQs(50, 50)
 {
-	BResources *res = BApplication::AppResources();
-	if (res == NULL)
+	// A replicant is hosted by Tracker, so AppResources() would point at
+	// Tracker rather than GLTeapot. Resolve the resource image from this
+	// module instead; it works both in the launched app and when loaded as an
+	// add-on for the desktop.
+	BResources resources;
+	if (resources.SetToImage((const void*)&materials) != B_OK)
 		return;
+	BResources* res = &resources;
 
 	size_t size = 0;
 	int32 *arrayOfPoints
@@ -425,4 +430,3 @@ TriangleObject::DoDrawing(bool forID)
 		glEnd();
  #endif
 }
-
