@@ -1,0 +1,17 @@
+name			intel_bluetooth_firmwares
+version			20260810-1
+architecture	any
+summary			"Intel Bluetooth bootloader firmware"
+
+description		"Bootloader firmware images (ibt-*.sfi) that Intel USB Bluetooth
+controllers need uploaded before they work, loaded by the h2generic driver.
+Taken unmodified from the Linux firmware collection."
+
+packager		"The Haiku build system"
+vendor			"Haiku Project"
+copyrights		"2014-2026 Intel Corporation"
+licenses		"IntelBluetoothFirmware"
+
+provides {
+	intel_bluetooth_firmwares = 20260810
+}

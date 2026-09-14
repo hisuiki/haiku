@@ -6,6 +6,7 @@ local packages = [ FFilterByBuildFeatures
 	HaikuExtras
 	HaikuLoader
 	HaikuSource
+	IntelBluetoothFirmwares
 	MakefileEngine
 	NetFS
 	UserlandFS

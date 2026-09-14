@@ -1,0 +1,18 @@
+local intelBluetoothFirmwaresPackage = intel_bluetooth_firmwares.hpkg ;
+HaikuPackage $(intelBluetoothFirmwaresPackage) ;
+
+local firmwareDir = [ FDirName $(HAIKU_TOP) intel_bluetooth_firmwares ] ;
+
+local firmwareFiles = [ Glob [ FDirName $(firmwareDir) firmware ] : ibt-*.sfi ] ;
+firmwareFiles = $(firmwareFiles:G=intel-bt-firmware) ;
+AddFilesToPackage data firmware h2generic : $(firmwareFiles) ;
+
+AddFilesToPackage data licenses
+	: [ FDirName $(firmwareDir) LICENCE.ibt_firmware ] : IntelBluetoothFirmware ;
+AddFilesToPackage documentation packages intel_bluetooth_firmwares
+	: [ FDirName $(firmwareDir) WHENCE ] : WHENCE ;
+AddFilesToPackage documentation packages intel_bluetooth_firmwares
+	: [ FDirName $(firmwareDir) README.md ] : README.md ;
+
+BuildHaikuPackage $(intelBluetoothFirmwaresPackage)
+	: intel_bluetooth_firmwares ;
