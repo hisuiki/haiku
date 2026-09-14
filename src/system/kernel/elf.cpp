@@ -2252,6 +2252,7 @@ load_kernel_add_on(const char *path)
 				// we don't use it
 				continue;
 			case PT_EH_FRAME:
+			case PT_GNU_PROPERTY:
 				// not implemented yet, but can be ignored
 				continue;
 			case PT_ARM_UNWIND:
