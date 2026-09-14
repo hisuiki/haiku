@@ -1,3 +1,6 @@
 [submodule "intel_gfx"]
 	path = intel_gfx
 	url = https://github.com/hisuiki/IntelGfx.git
+[submodule "intel_bluetooth_firmwares"]
+	path = intel_bluetooth_firmwares
+	url = https://github.com/hisuiki/intel_bluetooth_firmwares.git
