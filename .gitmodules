@@ -4,3 +4,6 @@
 [submodule "intel_bluetooth_firmwares"]
 	path = intel_bluetooth_firmwares
 	url = https://github.com/hisuiki/intel_bluetooth_firmwares.git
+[submodule "haiku_linux_compat"]
+	path = haiku_linux_compat
+	url = https://github.com/hisuiki/haiku-linux-compat.git

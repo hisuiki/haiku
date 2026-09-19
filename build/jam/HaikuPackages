@@ -15,6 +15,10 @@ local packages = [ FFilterByBuildFeatures
 	]
 	;
 
+if [ Glob [ FDirName $(HAIKU_BUILD_RULES_DIR) packages ] : LinuxCompat ] {
+	packages += LinuxCompat ;
+}
+
 if $(HAIKU_BUILD_TYPE) = bootstrap {
 	packages += HaikuBootstrap ;
 } else {
