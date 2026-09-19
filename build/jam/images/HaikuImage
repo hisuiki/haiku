@@ -34,6 +34,12 @@ if $(TARGET_PACKAGING_ARCH) = x86_64
 		intel_gfx.hpkg
 		<intel-gfx>intel-gfx-vulkan-loader.hpkg
 		: nameFromMetaInfo ;
+
+	if [ Glob [ FDirName $(HAIKU_BUILD_RULES_DIR) packages ] : LinuxCompat ] {
+		AddPackageFilesToHaikuImage system packages :
+			linux_run.hpkg
+			: nameFromMetaInfo ;
+	}
 }
 
 if $(HAIKU_BUILD_TYPE) = test {

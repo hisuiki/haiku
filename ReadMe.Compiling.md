@@ -230,6 +230,43 @@ You can also force the rebuild of a component by using the `-a` parameter:
 jam -qa Debugger
 ```
 
+Optional Submodules and Overlays
+--------------------------------
+The Haiku source repository includes optional components managed via git submodules:
+
+### IntelGfx (`intel_gfx`)
+Provides the experimental Mesa Iris Gallium OpenGL renderer and Intel Vulkan ANV driver for Intel Skylake/Kaby Lake graphics. On `x86_64`, `intel_gfx.hpkg` is automatically built and bundled into default installation images.
+
+### Linux Compatibility Layer (`haiku_linux_compat`)
+Provides an on-demand overlay for running x86_64 Linux ELF binaries and containers on Haiku.
+
+To ensure the default Haiku build remains clean and upstream-compatible, the overlay is applied dynamically rather than permanently merged into the base source tree:
+
+* **Default image build** (vanilla Haiku, no Linux compat):
+  ```sh
+  jam -q -j$(nproc) @nightly-anyboot
+  ```
+
+* **Build anyboot image with Linux compat**:
+  ```sh
+  jam -q -j$(nproc) linux_compat_anyboot
+  ```
+  This automatically applies the overlay and builds `@nightly-anyboot` with `linux_run.hpkg` included in `/system/packages/`.
+
+* **Build package standalone**:
+  ```sh
+  jam -q linux_run.hpkg
+  ```
+
+* **Manual overlay management**:
+  ```sh
+  # Apply overlay files into the tree
+  jam setup_linux_compat_overlay
+
+  # Revert overlay files back to clean upstream git state
+  jam revert_linux_compat_overlay
+  ```
+
 Bootstrap Build
 ----------------
 New architectures (and occasionally existing ones) will require a bootstrap
