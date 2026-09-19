@@ -519,20 +519,6 @@ submit_nbuffer(hci_id hid, net_buffer* nbuf)
 }
 
 
-static void
-clear_halted_pipe(const usb_endpoint_info* endpoint)
-{
-	if (endpoint == NULL)
-		return;
-
-	usb->cancel_queued_transfers(endpoint->handle);
-	status_t status = usb->clear_feature(endpoint->handle,
-		USB_FEATURE_ENDPOINT_HALT);
-	if (status != B_OK)
-		ERROR("%s: clearing halt failed: %s\n", __func__, strerror(status));
-}
-
-
 // implements the POSIX open()
 static status_t
 device_open(const char* name, uint32 flags, void **cookie)
@@ -572,14 +558,6 @@ device_open(const char* name, uint32 flags, void **cookie)
 			*cookie = NULL;
 			return err;
 		}
-
-		// The controller reboots into the new firmware while a transfer is
-		// queued on its bulk pipes; xhci reports a USB transaction error and
-		// halts the endpoint. A halted endpoint never completes the ACL
-		// receive queued on it later, so every remote device's replies are
-		// lost. Cancelling resets the host side, the clear resets the device.
-		clear_halted_pipe(bdev->bulk_in_ep);
-		clear_halted_pipe(bdev->bulk_out_ep);
 	}
 
 	acquire_sem(bdev->lock);

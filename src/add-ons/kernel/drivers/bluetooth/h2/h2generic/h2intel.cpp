@@ -641,6 +641,21 @@ intel_boot_firmware(bt_usb_dev* device, uint32 bootAddress)
 }
 
 
+static void
+intel_clear_halted_pipe(const usb_endpoint_info* endpoint)
+{
+	if (endpoint == NULL)
+		return;
+
+	usb->cancel_queued_transfers(endpoint->handle);
+	status_t status = usb->clear_feature(endpoint->handle,
+		USB_FEATURE_ENDPOINT_HALT);
+	if (status != B_OK)
+		ERROR("clearing halt on Intel Bluetooth pipe failed: %s\n",
+			strerror(status));
+}
+
+
 status_t
 intel_bluetooth_setup(bt_usb_dev* device)
 {
@@ -742,6 +757,14 @@ intel_bluetooth_setup(bt_usb_dev* device)
 			strerror(status));
 		return status;
 	}
+
+	// Rebooting into the firmware halts the bulk pipes that were listening
+	// for events (xhci reports a USB transaction error), and a halted endpoint
+	// never completes the ACL receive queued later. Only do this after an
+	// actual reboot: clearing a pipe that is not halted resets the device's
+	// data toggle but not the controller's, and ACL data is then dropped.
+	intel_clear_halted_pipe(device->bulk_in_ep);
+	intel_clear_halted_pipe(device->bulk_out_ep);
 
 	ERROR("loaded Intel Bluetooth firmware %s\n", firmwareName);
 	return B_OK;
