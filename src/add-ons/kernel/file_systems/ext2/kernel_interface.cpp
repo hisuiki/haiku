@@ -1753,7 +1753,35 @@ static file_system_module_info sExt2FileSystem = {
 };
 
 
+// The on-disk format has been advertised as ext4 since extent support was
+// added, but the original add-on/module name is ext2.  Export an ext4 module
+// alias as well so callers of mount(1) can select the filesystem by the name
+// reported in fs_info instead of needing to know the historical add-on name.
+static file_system_module_info sExt4FileSystem = {
+	{
+		"file_systems/ext4" B_CURRENT_FS_API_VERSION,
+		0,
+		NULL,
+	},
+
+	"ext4",
+	"Linux Extended File System 2/3/4",
+	B_DISK_SYSTEM_SUPPORTS_WRITING
+		| B_DISK_SYSTEM_SUPPORTS_CONTENT_NAME,
+
+	ext2_identify_partition,
+	ext2_scan_partition,
+	ext2_free_identify_partition_cookie,
+	NULL,
+
+	&ext2_mount,
+
+	NULL,
+};
+
+
 module_info *modules[] = {
 	(module_info *)&sExt2FileSystem,
+	(module_info *)&sExt4FileSystem,
 	NULL,
 };
