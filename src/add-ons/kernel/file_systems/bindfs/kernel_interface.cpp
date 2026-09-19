@@ -7,6 +7,7 @@
 #include <new>
 
 #include <fs_info.h>
+#include <fs_volume.h>
 #include <fs_interface.h>
 #include <KernelExport.h>
 
@@ -38,6 +39,20 @@
 
 
 // #pragma mark - helper macros
+
+
+/*!	Refuses an operation that would change the source of a read-only bind.
+
+	bindfs hands every operation to the file system it binds, which has no way
+	of knowing that this particular view of it was mounted read-only. Without
+	this the flag would be accepted and quietly ignored, which is worse than
+	refusing it: a caller would believe the source was protected.
+*/
+#define REFUSE_IF_READ_ONLY(volume)									\
+	if ((volume)->IsReadOnly())										\
+		RETURN_ERROR(B_READ_ONLY_DEVICE);
+
+
 
 
 #define FETCH_SOURCE_NODE(PREFIX, SOURCE_VOLUME, NODE_ID)			\
@@ -76,6 +91,8 @@ bindfs_mount(fs_volume* fsVolume, const char* device, uint32 flags,
 	if (volume == NULL)
 		RETURN_ERROR(B_NO_MEMORY);
 	ObjectDeleter<Volume> volumeDeleter(volume);
+
+	volume->SetReadOnly((flags & B_MOUNT_READ_ONLY) != 0);
 
 	status_t error = volume->Mount(parameters);
 	if (error != B_OK)
@@ -224,6 +241,7 @@ static status_t
 bindfs_remove_vnode(fs_volume* fsVolume, fs_vnode* fsNode, bool reenter)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p\n", volume, node);
@@ -281,6 +299,7 @@ bindfs_write_pages(fs_volume* fsVolume, fs_vnode* fsNode, void* cookie,
 	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), cookie: %p, "
@@ -466,6 +485,7 @@ bindfs_create_symlink(fs_volume* fsVolume, fs_vnode* fsNode, const char* name,
 	const char* path, int mode)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), "
@@ -484,6 +504,7 @@ bindfs_link(fs_volume* fsVolume, fs_vnode* fsNode, const char* name,
 	fs_vnode* toNode)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), "
@@ -500,6 +521,7 @@ static status_t
 bindfs_unlink(fs_volume* fsVolume, fs_vnode* fsNode, const char* name)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), name: %s\n",
@@ -516,6 +538,7 @@ bindfs_rename(fs_volume* fsVolume, fs_vnode* fromDir, const char* fromName,
 	fs_vnode* toDir, const char* toName)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* fromNode = (Node*)fromDir->private_node;
 	Node* toNode = (Node*)toDir->private_node;
 
@@ -572,6 +595,7 @@ bindfs_write_stat(fs_volume* fsVolume, fs_vnode* fsNode,
 	const struct stat* _st, uint32 statMask)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO ")\n",
@@ -592,6 +616,7 @@ bindfs_preallocate(fs_volume* fsVolume, fs_vnode* fsNode, off_t pos,
 	off_t length)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), pos: %" B_PRIdOFF ", "
@@ -612,6 +637,7 @@ bindfs_create(fs_volume* fsVolume, fs_vnode* fsNode, const char* name,
 	int openMode, int perms, void** _cookie, ino_t* _newVnodeID)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), "
@@ -712,6 +738,7 @@ bindfs_write(fs_volume* fsVolume, fs_vnode* fsNode, void* cookie,
 	off_t offset, const void* buffer, size_t* bufferSize)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), cookie: %p, "
@@ -733,6 +760,7 @@ bindfs_create_dir(fs_volume* fsVolume, fs_vnode* fsNode, const char* name,
 	int perms)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), name: %s, perms: %x\n",
@@ -748,6 +776,7 @@ static status_t
 bindfs_remove_dir(fs_volume* fsVolume, fs_vnode* fsNode, const char* name)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), name: %s\n", volume, node,
@@ -926,6 +955,7 @@ bindfs_create_attr(fs_volume* fsVolume, fs_vnode* fsNode, const char* name,
 	uint32 type, int openMode, void** _cookie)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), name: \"%s\", "
@@ -1009,6 +1039,7 @@ bindfs_write_attr(fs_volume* fsVolume, fs_vnode* fsNode, void* cookie,
 	off_t offset, const void* buffer, size_t* bufferSize)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), cookie: %p\n",
@@ -1049,6 +1080,7 @@ bindfs_write_attr_stat(fs_volume* fsVolume, fs_vnode* fsNode, void* cookie,
 	const struct stat* _st, int statMask)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO"), cookie: %p\n",
@@ -1070,6 +1102,7 @@ bindfs_rename_attr(fs_volume* fsVolume, fs_vnode* fsNode, const char* fromName,
 	fs_vnode* toDir, const char* toName)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), from: %s, toDir: %p, "
@@ -1087,6 +1120,7 @@ static status_t
 bindfs_remove_attr(fs_volume* fsVolume, fs_vnode* fsNode, const char* name)
 {
 	Volume* volume = (Volume*)fsVolume->private_volume;
+	REFUSE_IF_READ_ONLY(volume);
 	Node* node = (Node*)fsNode->private_node;
 
 	FUNCTION("volume: %p, node: %p (%" B_PRIdINO "), name: %s\n",

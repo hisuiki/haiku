@@ -34,7 +34,8 @@ Volume::Volume(fs_volume* fsVolume)
 	fFSVolume(fsVolume),
 	fSourceFSVolume(NULL),
 	fSourceVnode(NULL),
-	fRootNode(NULL)
+	fRootNode(NULL),
+	fReadOnly(false)
 {
 }
 
