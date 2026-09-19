@@ -10,8 +10,12 @@
 #include <net_datalink_protocol.h>
 #include <NetUtilities.h>
 #include <NetBufferUtilities.h>
+#include <ProtocolUtilities.h>
 
 #include <KernelExport.h>
+#include <lock.h>
+#include <util/AutoLock.h>
+#include <util/DoublyLinkedList.h>
 #include <util/list.h>
 
 #include <netinet/icmp6.h>
@@ -34,9 +38,37 @@
 typedef NetBufferField<uint16, offsetof(icmp6_hdr, icmp6_cksum)> ICMP6ChecksumField;
 
 
+// See the ICMP module: a datagram socket may only send echo requests with its
+// own identifier, and receives the replies to them.
+class PingSocket
+	: public DoublyLinkedListLinkImpl<PingSocket>, public DatagramSocket<> {
+public:
+	PingSocket(net_socket* socket)
+		:
+		DatagramSocket<>("icmp6 ping socket", socket),
+		identifier(0)
+	{
+	}
+
+	uint16	identifier;
+};
+
+typedef DoublyLinkedList<PingSocket> PingSocketList;
+
+
+struct icmp6_protocol : net_protocol {
+	PingSocket*	ping;
+};
+
+
 net_buffer_module_info *gBufferModule;
-static net_stack_module_info *sStackModule;
+net_stack_module_info *gStackModule;
+static net_datalink_module_info *sDatalinkModule;
 static net_ndp_module_info *sIPv6NDPModule;
+
+static PingSocketList sPingSockets;
+static mutex sPingSocketsLock = MUTEX_INITIALIZER("icmp6 ping sockets");
+static uint16 sNextPingIdentifier = 1;
 
 
 static net_error
@@ -60,10 +92,11 @@ icmp6_to_net_error(uint8 type, uint8 code)
 net_protocol *
 icmp6_init_protocol(net_socket *socket)
 {
-	net_protocol *protocol = new (std::nothrow) net_protocol;
+	icmp6_protocol *protocol = new (std::nothrow) icmp6_protocol;
 	if (protocol == NULL)
 		return NULL;
 
+	protocol->ping = NULL;
 	return protocol;
 }
 
@@ -71,21 +104,60 @@ icmp6_init_protocol(net_socket *socket)
 status_t
 icmp6_uninit_protocol(net_protocol *protocol)
 {
-	delete protocol;
+	delete (icmp6_protocol*)protocol;
+	return B_OK;
+}
+
+
+//! Called with sPingSocketsLock held.
+static bool
+ping_identifier_in_use(uint16 identifier)
+{
+	PingSocketList::Iterator iterator = sPingSockets.GetIterator();
+	while (PingSocket* ping = iterator.Next()) {
+		if (ping->identifier == identifier)
+			return true;
+	}
+	return false;
+}
+
+
+status_t
+icmp6_open(net_protocol *_protocol)
+{
+	icmp6_protocol *protocol = (icmp6_protocol*)_protocol;
+
+	PingSocket* ping = new (std::nothrow) PingSocket(protocol->socket);
+	if (ping == NULL)
+		return B_NO_MEMORY;
+
+	status_t status = ping->InitCheck();
+	if (status != B_OK) {
+		delete ping;
+		return status;
+	}
+
+	protocol->ping = ping;
+	MutexLocker locker(sPingSocketsLock);
+	sPingSockets.Add(ping);
 	return B_OK;
 }
 
 
 status_t
-icmp6_open(net_protocol *protocol)
+icmp6_close(net_protocol *_protocol)
 {
-	return B_OK;
-}
+	icmp6_protocol *protocol = (icmp6_protocol*)_protocol;
+	PingSocket* ping = protocol->ping;
+	if (ping == NULL)
+		return B_OK;
 
+	MutexLocker locker(sPingSocketsLock);
+	sPingSockets.Remove(ping);
+	locker.Unlock();
 
-status_t
-icmp6_close(net_protocol *protocol)
-{
+	delete ping;
+	protocol->ping = NULL;
 	return B_OK;
 }
 
@@ -138,17 +210,51 @@ icmp6_setsockopt(net_protocol *protocol, int level, int option,
 }
 
 
+/*!	The port of a ping socket's address is its echo identifier; binding to
+	port 0 picks a free one.
+*/
 status_t
-icmp6_bind(net_protocol *protocol, const struct sockaddr *address)
+icmp6_bind(net_protocol *_protocol, const struct sockaddr *address)
 {
-	return B_ERROR;
+	icmp6_protocol *protocol = (icmp6_protocol*)_protocol;
+	PingSocket* ping = protocol->ping;
+	if (ping == NULL)
+		return B_ERROR;
+	if (address->sa_family != AF_INET6)
+		return EAFNOSUPPORT;
+
+	uint16 identifier = ((const sockaddr_in6*)address)->sin6_port;
+
+	MutexLocker locker(sPingSocketsLock);
+	if (identifier == 0) {
+		for (int attempt = 0; attempt < 65535; attempt++) {
+			uint16 candidate = htons(sNextPingIdentifier++);
+			if (candidate != 0 && !ping_identifier_in_use(candidate)) {
+				identifier = candidate;
+				break;
+			}
+		}
+		if (identifier == 0)
+			return EADDRINUSE;
+	} else if (ping_identifier_in_use(identifier))
+		return EADDRINUSE;
+
+	ping->identifier = identifier;
+	((sockaddr_in6*)&protocol->socket->address)->sin6_port = identifier;
+	return B_OK;
 }
 
 
 status_t
-icmp6_unbind(net_protocol *protocol, struct sockaddr *address)
+icmp6_unbind(net_protocol *_protocol, struct sockaddr *address)
 {
-	return B_ERROR;
+	icmp6_protocol *protocol = (icmp6_protocol*)_protocol;
+	if (protocol->ping == NULL)
+		return B_ERROR;
+
+	MutexLocker locker(sPingSocketsLock);
+	protocol->ping->identifier = 0;
+	return B_OK;
 }
 
 
@@ -167,24 +273,52 @@ icmp6_shutdown(net_protocol *protocol, int direction)
 
 
 status_t
-icmp6_send_data(net_protocol *protocol, net_buffer *buffer)
+icmp6_send_data(net_protocol *_protocol, net_buffer *buffer)
 {
-	return protocol->next->module->send_data(protocol->next, buffer);
+	icmp6_protocol *protocol = (icmp6_protocol*)_protocol;
+	if (protocol->ping == NULL)
+		return B_ERROR;
+
+	// The checksum covers the source address, which is only known once the
+	// datalink layer has picked a route; it calls send_routed_data() then.
+	return sDatalinkModule->send_data(protocol,
+		protocol->next->module->get_domain(protocol->next), buffer);
 }
 
 
 status_t
-icmp6_send_routed_data(net_protocol *protocol, struct net_route *route,
+icmp6_send_routed_data(net_protocol *_protocol, struct net_route *route,
 	net_buffer *buffer)
 {
-	return protocol->next->module->send_routed_data(protocol->next, route, buffer);
+	icmp6_protocol *protocol = (icmp6_protocol*)_protocol;
+	PingSocket* ping = protocol->ping;
+	if (ping == NULL)
+		return B_ERROR;
+
+	NetBufferHeaderReader<icmp6_hdr> header(buffer);
+	if (header.Status() != B_OK)
+		return EINVAL;
+	if (header->icmp6_type != ICMP6_ECHO_REQUEST || header->icmp6_code != 0)
+		return EINVAL;
+
+	header->icmp6_id = ping->identifier;
+	header->icmp6_cksum = 0;
+	header.Sync();
+
+	net_domain* domain = protocol->next->module->get_domain(protocol->next);
+	*ICMP6ChecksumField(buffer) = Checksum::PseudoHeader(
+		domain->address_module, gBufferModule, buffer, IPPROTO_ICMPV6);
+	buffer->protocol = IPPROTO_ICMPV6;
+
+	return protocol->next->module->send_routed_data(protocol->next, route,
+		buffer);
 }
 
 
 ssize_t
 icmp6_send_avail(net_protocol *protocol)
 {
-	return B_ERROR;
+	return protocol->socket->send.buffer_size;
 }
 
 
@@ -192,14 +326,36 @@ status_t
 icmp6_read_data(net_protocol *protocol, size_t numBytes, uint32 flags,
 	net_buffer **_buffer)
 {
-	return B_ERROR;
+	PingSocket* ping = ((icmp6_protocol*)protocol)->ping;
+	if (ping == NULL)
+		return B_ERROR;
+
+	return ping->Dequeue(flags, _buffer);
 }
 
 
 ssize_t
 icmp6_read_avail(net_protocol *protocol)
 {
-	return B_ERROR;
+	PingSocket* ping = ((icmp6_protocol*)protocol)->ping;
+	if (ping == NULL)
+		return B_ERROR;
+
+	return ping->AvailableData();
+}
+
+
+static void
+deliver_echo_reply(net_buffer* buffer, uint16 identifier)
+{
+	MutexLocker locker(sPingSocketsLock);
+	PingSocketList::Iterator iterator = sPingSockets.GetIterator();
+	while (PingSocket* ping = iterator.Next()) {
+		if (ping->identifier == identifier) {
+			ping->EnqueueClone(buffer);
+			return;
+		}
+	}
 }
 
 
@@ -224,7 +380,7 @@ get_domain(struct net_buffer* buffer)
 	if (buffer->interface_address != NULL)
 		domain = buffer->interface_address->domain;
 	else
-		domain = sStackModule->get_domain(buffer->source->sa_family);
+		domain = gStackModule->get_domain(buffer->source->sa_family);
 
 	if (domain == NULL || domain->module == NULL)
 		return NULL;
@@ -261,6 +417,7 @@ icmp6_receive_data(net_buffer *buffer)
 
 	switch (header.icmp6_type) {
 		case ICMP6_ECHO_REPLY:
+			deliver_echo_reply(buffer, header.icmp6_id);
 			break;
 
 		case ICMP6_ECHO_REQUEST:
@@ -361,12 +518,14 @@ icmp6_error_reply(net_protocol* protocol, net_buffer* buffer, net_error error,
 static status_t
 icmp6_init()
 {
-	sStackModule->register_domain_protocols(AF_INET6, SOCK_DGRAM, IPPROTO_ICMPV6,
+	new (&sPingSockets) PingSocketList;
+
+	gStackModule->register_domain_protocols(AF_INET6, SOCK_DGRAM, IPPROTO_ICMPV6,
 		"network/protocols/icmp6/v1",
 		"network/protocols/ipv6/v1",
 		NULL);
 
-	sStackModule->register_domain_receiving_protocol(AF_INET6, IPPROTO_ICMPV6,
+	gStackModule->register_domain_receiving_protocol(AF_INET6, IPPROTO_ICMPV6,
 		"network/protocols/icmp6/v1");
 
 	return B_OK;
@@ -430,8 +589,9 @@ net_protocol_module_info sICMP6Module = {
 };
 
 module_dependency module_dependencies[] = {
-	{NET_STACK_MODULE_NAME, (module_info **)&sStackModule},
+	{NET_STACK_MODULE_NAME, (module_info **)&gStackModule},
 	{NET_BUFFER_MODULE_NAME, (module_info **)&gBufferModule},
+	{NET_DATALINK_MODULE_NAME, (module_info **)&sDatalinkModule},
 	{"network/datalink_protocols/ipv6_datagram/ndp/v1",
 		(module_info **)&sIPv6NDPModule},
 	{}

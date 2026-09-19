@@ -23,11 +23,15 @@
 #include <KernelExport.h>
 #include <OS.h>
 
+#include <lock.h>
 #include <net_datalink.h>
 #include <net_protocol.h>
 #include <net_stack.h>
 #include <NetBufferUtilities.h>
 #include <NetUtilities.h>
+#include <ProtocolUtilities.h>
+#include <util/AutoLock.h>
+#include <util/DoublyLinkedList.h>
 
 #include "ipv4.h"
 
@@ -69,12 +73,36 @@ typedef NetBufferField<uint16, offsetof(icmp_header, checksum)>
 	ICMPChecksumField;
 
 
+// A datagram ICMP socket is a "ping socket": anyone may open one, but it can
+// only send echo requests, carrying the socket's own identifier, and it only
+// receives the replies to them.
+class PingSocket
+	: public DoublyLinkedListLinkImpl<PingSocket>, public DatagramSocket<> {
+public:
+	PingSocket(net_socket* socket)
+		:
+		DatagramSocket<>("icmp ping socket", socket),
+		identifier(0)
+	{
+	}
+
+	uint16	identifier;
+};
+
+typedef DoublyLinkedList<PingSocket> PingSocketList;
+
+
 struct icmp_protocol : net_protocol {
+	PingSocket*	ping;
 };
 
 
 net_buffer_module_info* gBufferModule;
-static net_stack_module_info* sStackModule;
+net_stack_module_info* gStackModule;
+
+static PingSocketList sPingSockets;
+static mutex sPingSocketsLock = MUTEX_INITIALIZER("icmp ping sockets");
+static uint16 sNextPingIdentifier = 1;
 
 
 #ifdef TRACE_ICMP
@@ -112,7 +140,7 @@ get_domain(struct net_buffer* buffer)
 	if (buffer->interface_address != NULL)
 		domain = buffer->interface_address->domain;
 	else
-		domain = sStackModule->get_domain(buffer->source->sa_family);
+		domain = gStackModule->get_domain(buffer->source->sa_family);
 
 	if (domain == NULL || domain->module == NULL)
 		return NULL;
@@ -318,6 +346,7 @@ icmp_init_protocol(net_socket* socket)
 	if (protocol == NULL)
 		return NULL;
 
+	protocol->ping = NULL;
 	return protocol;
 }
 
@@ -330,16 +359,55 @@ icmp_uninit_protocol(net_protocol* protocol)
 }
 
 
-status_t
-icmp_open(net_protocol* protocol)
+//! Called with sPingSocketsLock held.
+static bool
+ping_identifier_in_use(uint16 identifier)
 {
+	PingSocketList::Iterator iterator = sPingSockets.GetIterator();
+	while (PingSocket* ping = iterator.Next()) {
+		if (ping->identifier == identifier)
+			return true;
+	}
+	return false;
+}
+
+
+status_t
+icmp_open(net_protocol* _protocol)
+{
+	icmp_protocol* protocol = (icmp_protocol*)_protocol;
+
+	PingSocket* ping = new(std::nothrow) PingSocket(protocol->socket);
+	if (ping == NULL)
+		return B_NO_MEMORY;
+
+	status_t status = ping->InitCheck();
+	if (status != B_OK) {
+		delete ping;
+		return status;
+	}
+
+	protocol->ping = ping;
+	MutexLocker locker(sPingSocketsLock);
+	sPingSockets.Add(ping);
 	return B_OK;
 }
 
 
 status_t
-icmp_close(net_protocol* protocol)
+icmp_close(net_protocol* _protocol)
 {
+	icmp_protocol* protocol = (icmp_protocol*)_protocol;
+	PingSocket* ping = protocol->ping;
+	if (ping == NULL)
+		return B_OK;
+
+	MutexLocker locker(sPingSocketsLock);
+	sPingSockets.Remove(ping);
+	locker.Unlock();
+
+	delete ping;
+	protocol->ping = NULL;
 	return B_OK;
 }
 
@@ -392,17 +460,51 @@ icmp_setsockopt(net_protocol* protocol, int level, int option,
 }
 
 
+/*!	The port of a ping socket's address is its echo identifier; binding to
+	port 0 picks a free one.
+*/
 status_t
-icmp_bind(net_protocol* protocol, const struct sockaddr* address)
+icmp_bind(net_protocol* _protocol, const struct sockaddr* address)
 {
-	return B_ERROR;
+	icmp_protocol* protocol = (icmp_protocol*)_protocol;
+	PingSocket* ping = protocol->ping;
+	if (ping == NULL)
+		return B_ERROR;
+	if (address->sa_family != AF_INET)
+		return EAFNOSUPPORT;
+
+	uint16 identifier = ((const sockaddr_in*)address)->sin_port;
+
+	MutexLocker locker(sPingSocketsLock);
+	if (identifier == 0) {
+		for (int attempt = 0; attempt < 65535; attempt++) {
+			uint16 candidate = htons(sNextPingIdentifier++);
+			if (candidate != 0 && !ping_identifier_in_use(candidate)) {
+				identifier = candidate;
+				break;
+			}
+		}
+		if (identifier == 0)
+			return EADDRINUSE;
+	} else if (ping_identifier_in_use(identifier))
+		return EADDRINUSE;
+
+	ping->identifier = identifier;
+	((sockaddr_in*)&protocol->socket->address)->sin_port = identifier;
+	return B_OK;
 }
 
 
 status_t
-icmp_unbind(net_protocol* protocol, struct sockaddr* address)
+icmp_unbind(net_protocol* _protocol, struct sockaddr* address)
 {
-	return B_ERROR;
+	icmp_protocol* protocol = (icmp_protocol*)_protocol;
+	if (protocol->ping == NULL)
+		return B_ERROR;
+
+	MutexLocker locker(sPingSocketsLock);
+	protocol->ping->identifier = 0;
+	return B_OK;
 }
 
 
@@ -420,9 +522,36 @@ icmp_shutdown(net_protocol* protocol, int direction)
 }
 
 
+static status_t
+prepare_echo_request(icmp_protocol* protocol, net_buffer* buffer)
+{
+	PingSocket* ping = protocol->ping;
+	if (ping == NULL)
+		return B_ERROR;
+
+	NetBufferHeaderReader<icmp_header> header(buffer);
+	if (header.Status() != B_OK)
+		return EINVAL;
+	if (header->type != ICMP_TYPE_ECHO_REQUEST || header->code != 0)
+		return EINVAL;
+
+	header->echo.id = ping->identifier;
+	header->checksum = 0;
+	header.Sync();
+	*ICMPChecksumField(buffer) = gBufferModule->checksum(buffer, 0,
+		buffer->size, true);
+	buffer->protocol = IPPROTO_ICMP;
+	return B_OK;
+}
+
+
 status_t
 icmp_send_data(net_protocol* protocol, net_buffer* buffer)
 {
+	status_t status = prepare_echo_request((icmp_protocol*)protocol, buffer);
+	if (status != B_OK)
+		return status;
+
 	return protocol->next->module->send_data(protocol->next, buffer);
 }
 
@@ -431,6 +560,10 @@ status_t
 icmp_send_routed_data(net_protocol* protocol, struct net_route* route,
 	net_buffer* buffer)
 {
+	status_t status = prepare_echo_request((icmp_protocol*)protocol, buffer);
+	if (status != B_OK)
+		return status;
+
 	return protocol->next->module->send_routed_data(protocol->next, route,
 		buffer);
 }
@@ -439,22 +572,44 @@ icmp_send_routed_data(net_protocol* protocol, struct net_route* route,
 ssize_t
 icmp_send_avail(net_protocol* protocol)
 {
-	return B_ERROR;
+	return protocol->socket->send.buffer_size;
 }
 
 
 status_t
-icmp_read_data(net_protocol* protocol, size_t numBytes, uint32 flags,
+icmp_read_data(net_protocol* _protocol, size_t numBytes, uint32 flags,
 	net_buffer** _buffer)
 {
-	return B_ERROR;
+	PingSocket* ping = ((icmp_protocol*)_protocol)->ping;
+	if (ping == NULL)
+		return B_ERROR;
+
+	return ping->Dequeue(flags, _buffer);
 }
 
 
 ssize_t
-icmp_read_avail(net_protocol* protocol)
+icmp_read_avail(net_protocol* _protocol)
 {
-	return B_ERROR;
+	PingSocket* ping = ((icmp_protocol*)_protocol)->ping;
+	if (ping == NULL)
+		return B_ERROR;
+
+	return ping->AvailableData();
+}
+
+
+static void
+deliver_echo_reply(net_buffer* buffer, uint16 identifier)
+{
+	MutexLocker locker(sPingSocketsLock);
+	PingSocketList::Iterator iterator = sPingSockets.GetIterator();
+	while (PingSocket* ping = iterator.Next()) {
+		if (ping->identifier == identifier) {
+			ping->EnqueueClone(buffer);
+			return;
+		}
+	}
 }
 
 
@@ -498,6 +653,7 @@ icmp_receive_data(net_buffer* buffer)
 
 	switch (type) {
 		case ICMP_TYPE_ECHO_REPLY:
+			deliver_echo_reply(buffer, header.echo.id);
 			break;
 
 		case ICMP_TYPE_ECHO_REQUEST:
@@ -723,13 +879,15 @@ icmp_std_ops(int32 op, ...)
 	switch (op) {
 		case B_MODULE_INIT:
 		{
-			sStackModule->register_domain_protocols(AF_INET, SOCK_DGRAM,
+			new(&sPingSockets) PingSocketList;
+
+			gStackModule->register_domain_protocols(AF_INET, SOCK_DGRAM,
 				IPPROTO_ICMP,
 				"network/protocols/icmp/v1",
 				"network/protocols/ipv4/v1",
 				NULL);
 
-			sStackModule->register_domain_receiving_protocol(AF_INET,
+			gStackModule->register_domain_receiving_protocol(AF_INET,
 				IPPROTO_ICMP, "network/protocols/icmp/v1");
 			return B_OK;
 		}
@@ -784,7 +942,7 @@ net_protocol_module_info sICMPModule = {
 };
 
 module_dependency module_dependencies[] = {
-	{NET_STACK_MODULE_NAME, (module_info**)&sStackModule},
+	{NET_STACK_MODULE_NAME, (module_info**)&gStackModule},
 	{NET_BUFFER_MODULE_NAME, (module_info**)&gBufferModule},
 	{}
 };
