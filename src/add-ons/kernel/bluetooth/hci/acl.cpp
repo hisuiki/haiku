@@ -60,9 +60,6 @@ AclAssembly(net_buffer* nbuf, hci_id hid)
 
 	aclHeader.Remove();
 
-	TRACE("%s: ACL data packet, handle=%#x, PB=%#x, length=%d\n", __func__,
-		con_handle, pb, length);
-
 	// a) Ensure there is HCI connection
 	// b) Get connection descriptor
 	// c) veryfy the status of the connection
@@ -107,9 +104,6 @@ AclAssembly(net_buffer* nbuf, hci_id hid)
 			return ENOBUFS;
 		}
 
-		TRACE("%s: New L2CAP, handle=%#x length=%d\n", __func__, con_handle,
-			B_LENDIAN_TO_HOST_INT16(l2capHeader->length));
-
 		// Start new L2CAP packet
 		conn->currentRxPacket = nbuf;
 		conn->currentRxExpectedLength = B_LENDIAN_TO_HOST_INT16(l2capHeader->length)
@@ -143,9 +137,6 @@ AclAssembly(net_buffer* nbuf, hci_id hid)
 
 	} else if (conn->currentRxExpectedLength == 0) {
 		// OK, we have got complete L2CAP packet, so process it
-		TRACE("%s: L2cap packet ready %" B_PRIu32 " bytes\n", __func__,
-			conn->currentRxPacket->size);
-
 		memcpy(conn->currentRxPacket->source, &conn->address_dest, sizeof(sockaddr_storage));
 		conn->currentRxPacket->interface_address = &conn->interface_address;
 
