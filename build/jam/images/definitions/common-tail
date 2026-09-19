@@ -71,10 +71,23 @@ AddUserToHaikuImage _login : 2 : 2 : /boot/system/cache/login : /bin/false
 	: "Login Service" ;
 AddUserToHaikuImage _media : 3 : 3 : /boot/system/cache/media : /bin/false
 	: "Media Service" ;
+# Containers run as this account rather than as the user who started them, so
+# that a process inside one cannot reach that user's files.
+AddUserToHaikuImage _container : 4 : 4 : /boot/system/cache/container : /bin/false
+	: "Container Service" ;
 AddGroupToHaikuImage root : 0 : ;
 AddGroupToHaikuImage _login : 2 : ;
 AddGroupToHaikuImage _media : 3 : ;
+AddGroupToHaikuImage _container : 4 : ;
 AddGroupToHaikuImage users : 100 : ;
+# Starting a container means changing root and choosing the account the payload
+# runs as, so it is a role granted to a user rather than something everyone has.
+AddGroupToHaikuImage container : 103
+	: $(HAIKU_DEFAULT_USER_NAME:E=$(HAIKU_ROOT_USER_NAME:E=user)) ;
+# Giving a container the GPU lets it drive the hardware directly, so that too is
+# a role of its own.
+AddGroupToHaikuImage video : 104
+	: $(HAIKU_DEFAULT_USER_NAME:E=$(HAIKU_ROOT_USER_NAME:E=user)) ;
 
 
 #pragma mark - Host Name

@@ -237,6 +237,7 @@ SYSTEM_SERVERS = [ FFilterByBuildFeatures
 	power_daemon
 	registrar
 	syslog_daemon
+	wayland_server
 ] ;
 
 SYSTEM_NETWORK_DEVICES =
@@ -383,9 +384,8 @@ SYSTEM_ADD_ONS_FILE_SYSTEMS =
 	attribute_overlay
 	bfs
 	bindfs
-	btrfs
+	container_overlay
 	exfat
-	ext2
 	fat
 	iso9660
 	log_overlay
