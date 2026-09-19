@@ -381,6 +381,7 @@ wlan_control(void* cookie, uint32 op, void* arg, size_t length)
 			struct ieee80211_nwid nwid;
 			struct ieee80211_wpaparams wpaparams;
 			struct ieee80211_wpapsk wpapsk;
+			bool setWPAParameters = false;
 			memset(&wpaparams, 0, sizeof(wpaparams));
 			memset(&wpapsk, 0, sizeof(wpapsk));
 
@@ -391,11 +392,17 @@ wlan_control(void* cookie, uint32 op, void* arg, size_t length)
 
 			switch (haiku_join->i_authentication_mode) {
 				case B_NETWORK_AUTHENTICATION_NONE:
+					// Explicitly leave RSN mode when moving from a protected
+					// network to an open hotspot.  Otherwise the old WPA state
+					// remains active and association with an open AP fails.
+					wpaparams.i_enabled = 0;
+					setWPAParameters = true;
 					break;
 
 				case B_NETWORK_AUTHENTICATION_WPA:
 				case B_NETWORK_AUTHENTICATION_WPA2:
 					wpaparams.i_enabled = 1;
+					setWPAParameters = true;
 					wpaparams.i_protos |=
 						(haiku_join->i_authentication_mode == B_NETWORK_AUTHENTICATION_WPA2) ?
 							IEEE80211_WPA_PROTO_WPA2 : IEEE80211_WPA_PROTO_WPA1;
@@ -441,7 +448,7 @@ wlan_control(void* cookie, uint32 op, void* arg, size_t length)
 					return status;
 				}
 			}
-			if (wpaparams.i_enabled) {
+			if (setWPAParameters) {
 				status = ifp->if_ioctl(ifp, SIOCS80211WPAPARMS, (caddr_t)&wpaparams);
 				if (status != B_OK) {
 					IFF_UNLOCKGIANT(ifp);

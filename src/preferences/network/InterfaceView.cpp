@@ -21,6 +21,8 @@
 #include <ControlLook.h>
 #include <LayoutBuilder.h>
 #include <NetworkAddress.h>
+#include <MessageRunner.h>
+#include <Roster.h>
 #include <StringForSize.h>
 #include <StringView.h>
 #include <TextControl.h>
@@ -32,6 +34,11 @@
 static const uint32 kMsgInterfaceToggle = 'onof';
 static const uint32 kMsgInterfaceRenegotiate = 'redo';
 static const uint32 kMsgJoinNetwork = 'join';
+static const uint32 kMsgOpenCaptivePortal = 'ocpt';
+
+static const char* kWebPositiveSignature = "application/x-vnd.Haiku-WebPositive";
+static const char* kCaptivePortalProbeURL
+	= "http://captive.apple.com/hotspot-detect.html";
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -146,9 +153,19 @@ InterfaceView::MessageReceived(BMessage* message)
 				if (status != B_OK) {
 					// This does not really matter, as it's stored this way,
 					// anyway.
+				} else if (message->GetBool("open network", false)) {
+					BMessage openPortal(kMsgOpenCaptivePortal);
+					BMessageRunner::StartSending(BMessenger(this), &openPortal,
+						2000000, 1);
 				}
 				// TODO: store value
 			}
+			break;
+		}
+		case kMsgOpenCaptivePortal:
+		{
+			const char* args[] = { kCaptivePortalProbeURL };
+			be_roster->Launch(kWebPositiveSignature, 1, args);
 			break;
 		}
 		case kMsgInterfaceToggle:
@@ -341,14 +358,15 @@ InterfaceView::_Update(bool updateWirelessNetworks)
 				message->AddString("device", fInterface.Name());
 				message->AddString("name", network.name);
 				message->AddFlat("address", &network.address);
+				message->AddBool("open network",
+					network.authentication_mode == B_NETWORK_AUTHENTICATION_NONE);
 				BMenuItem* item = new WirelessNetworkMenuItem(network,
 					message);
 				menu->AddItem(item);
 				if (associated.find(network.address) != associated.end())
 					item->SetMarked(true);
+				count++;
 			}
-
-			count++;
 		}
 
 		if (count == 0) {

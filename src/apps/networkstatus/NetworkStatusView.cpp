@@ -70,6 +70,13 @@ extern "C" _EXPORT BView *instantiate_deskbar_item(float maxWidth, float maxHeig
 const uint32 kMsgShowConfiguration = 'shcf';
 const uint32 kMsgOpenNetworkPreferences = 'onwp';
 const uint32 kMsgJoinNetwork = 'join';
+const uint32 kMsgOpenCaptivePortal = 'ocpt';
+
+const char* kWebPositiveSignature = "application/x-vnd.Haiku-WebPositive";
+// Captive portals intercept HTTP requests and redirect this well-known probe
+// to their sign-in page.  It deliberately stays HTTP so that interception does
+// not produce a certificate warning in HaikuWebKit.
+const char* kCaptivePortalProbeURL = "http://captive.apple.com/hotspot-detect.html";
 
 const uint32 kMinIconWidth = 16;
 const uint32 kMinIconHeight = 16;
@@ -272,8 +279,21 @@ NetworkStatusView::MessageReceived(BMessage* message)
 						B_STOP_ALERT);
 					alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 					alert->Go(NULL);
+				} else if (message->GetBool("open network", false)) {
+					// Joining is asynchronous.  Give association and DHCP a moment
+					// before asking HaikuWebKit to follow a captive-portal redirect.
+					BMessage openPortal(kMsgOpenCaptivePortal);
+					BMessageRunner::StartSending(BMessenger(this), &openPortal,
+						2000000, 1);
 				}
 			}
+			break;
+		}
+
+		case kMsgOpenCaptivePortal:
+		{
+			const char* args[] = { kCaptivePortalProbeURL };
+			be_roster->Launch(kWebPositiveSignature, 1, args);
 			break;
 		}
 
@@ -416,6 +436,8 @@ NetworkStatusView::MouseDown(BPoint point)
 			message->AddString("device", wifiInterface);
 			message->AddString("name", network.name);
 			message->AddFlat("address", &network.address);
+			message->AddBool("open network",
+				network.authentication_mode == B_NETWORK_AUTHENTICATION_NONE);
 
 			BMenuItem* item = new WirelessNetworkMenuItem(network, message);
 			menu->AddItem(item);

@@ -1083,9 +1083,20 @@ NetServer::_JoinNetwork(const BMessage& message, const BNetworkAddress* address,
 		// The wpa_supplicant isn't running yet, we may join ourselves.
 		if (!askForConfig
 			&& network.authentication_mode == B_NETWORK_AUTHENTICATION_NONE) {
-			// We can join this network ourselves.
-			status_t status = set_80211(deviceName, IEEE80211_IOC_SSID,
-				network.name, strlen(network.name));
+			// We can join this network ourselves.  Use the Haiku join request
+			// instead of only setting the SSID: it also clears any WPA state left
+			// by the previously connected protected network.
+			struct ieee80211_haiku_join_req request;
+			memset(&request, 0, sizeof(request));
+			request.i_nwid_len = strlen(network.name);
+			memcpy(request.i_nwid, network.name, request.i_nwid_len);
+			request.i_authentication_mode = B_NETWORK_AUTHENTICATION_NONE;
+			request.i_ciphers = B_NETWORK_CIPHER_NONE;
+			request.i_group_ciphers = B_NETWORK_CIPHER_NONE;
+			request.i_key_mode = B_KEY_MODE_NONE;
+
+			status_t status = set_80211(deviceName, IEEE80211_IOC_HAIKU_JOIN,
+				&request, sizeof(request));
 			if (status != B_OK) {
 				fprintf(stderr, "%s: joining SSID failed: %s\n", name,
 					strerror(status));
@@ -1195,4 +1206,3 @@ main(int argc, char** argv)
 	server.Run();
 	return 0;
 }
-

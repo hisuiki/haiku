@@ -393,10 +393,22 @@ fill_wireless_network(wireless_network& network,
 	network.flags |= (info.isi_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0
 		? B_NETWORK_IS_ENCRYPTED : 0;
 
-	network.authentication_mode = 0;
-	network.cipher = 0;
-	network.group_cipher = 0;
-	network.key_mode = 0;
+	// Start with the values for an open network.  A network without the
+	// privacy capability bit must not inherit an ambiguous zero cipher value:
+	// callers use this information to decide whether a password is needed.
+	network.authentication_mode = B_NETWORK_AUTHENTICATION_NONE;
+	network.cipher = B_NETWORK_CIPHER_NONE;
+	network.group_cipher = B_NETWORK_CIPHER_NONE;
+	network.key_mode = B_KEY_MODE_NONE;
+
+	// WEP networks do not advertise an RSN or WPA information element.  They
+	// still have the privacy capability bit set, so describe them accurately
+	// before parsing the optional security information elements below.
+	if ((network.flags & B_NETWORK_IS_ENCRYPTED) != 0) {
+		network.authentication_mode = B_NETWORK_AUTHENTICATION_WEP;
+		network.cipher = B_NETWORK_CIPHER_WEP_40 | B_NETWORK_CIPHER_WEP_104;
+		network.group_cipher = network.cipher;
+	}
 
 	parse_ie(network, info);
 }
@@ -414,10 +426,19 @@ fill_wireless_network(wireless_network& network, const char* networkName,
 	network.flags = (result.isr_capinfo & IEEE80211_CAPINFO_PRIVACY)
 		!= 0 ? B_NETWORK_IS_ENCRYPTED : 0;
 
-	network.authentication_mode = 0;
-	network.cipher = 0;
-	network.group_cipher = 0;
-	network.key_mode = 0;
+	// See the corresponding station-information version above.  In
+	// particular, an AP with no privacy bit is an open network, not one with
+	// unspecified authentication.
+	network.authentication_mode = B_NETWORK_AUTHENTICATION_NONE;
+	network.cipher = B_NETWORK_CIPHER_NONE;
+	network.group_cipher = B_NETWORK_CIPHER_NONE;
+	network.key_mode = B_KEY_MODE_NONE;
+
+	if ((network.flags & B_NETWORK_IS_ENCRYPTED) != 0) {
+		network.authentication_mode = B_NETWORK_AUTHENTICATION_WEP;
+		network.cipher = B_NETWORK_CIPHER_WEP_40 | B_NETWORK_CIPHER_WEP_104;
+		network.group_cipher = network.cipher;
+	}
 
 	parse_ie(network, result);
 }
@@ -455,9 +476,35 @@ get_scan_results(const char* device, wireless_network*& networks, uint32& count)
 		strlcpy(networkName, (char*)(result + 1),
 			min_c((int)sizeof(networkName), result->isr_ssid_len + 1));
 
-		wireless_network* network = new wireless_network;
-		fill_wireless_network(*network, networkName, *result);
-		networksList.AddItem(network);
+		wireless_network network;
+		fill_wireless_network(network, networkName, *result);
+
+		// A single ESS normally has one BSSID per radio, extender, or repeater.
+		// Present each SSID/security profile as one selectable network and retain
+		// the strongest BSSID for the actual join request.  SSIDs are
+		// case-sensitive by definition; hidden SSIDs cannot be grouped safely.
+		wireless_network* existing = NULL;
+		for (int32 i = 0; i < networksList.CountItems(); i++) {
+			wireless_network* candidate = networksList.ItemAt(i);
+			if (network.name[0] != '\0'
+				&& strncmp(candidate->name, network.name,
+					sizeof(network.name)) == 0
+				&& candidate->authentication_mode == network.authentication_mode
+				&& candidate->cipher == network.cipher
+				&& candidate->group_cipher == network.group_cipher
+				&& candidate->key_mode == network.key_mode) {
+				existing = candidate;
+				break;
+			}
+		}
+
+		if (existing == NULL)
+			networksList.AddItem(new wireless_network(network));
+		else if (network.signal_strength > existing->signal_strength
+			|| (network.signal_strength == existing->signal_strength
+				&& network.noise_level < existing->noise_level)) {
+			*existing = network;
+		}
 
 		entry += result->isr_len;
 		bytesLeft -= result->isr_len;
