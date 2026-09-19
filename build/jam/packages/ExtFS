@@ -1,0 +1,9 @@
+local extfsPackage = extfs.hpkg ;
+HaikuPackage $(extfsPackage) ;
+
+# The add-on is named "ext2" for compatibility, but implements ext2, ext3,
+# and ext4 volumes.
+AddFilesToPackage add-ons kernel file_systems : ext2 ;
+AddSymlinkToPackage add-ons kernel file_systems : ext2 : ext4 ;
+
+BuildHaikuPackage $(extfsPackage) : extfs ;

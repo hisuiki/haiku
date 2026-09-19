@@ -10,6 +10,8 @@ local packages = [ FFilterByBuildFeatures
 	MakefileEngine
 	NetFS
 	UserlandFS
+	ExtFS
+	ButterFS
 	]
 	;
 

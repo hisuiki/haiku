@@ -1,0 +1,6 @@
+local butterfsPackage = butterfs.hpkg ;
+HaikuPackage $(butterfsPackage) ;
+
+AddFilesToPackage add-ons kernel file_systems : btrfs ;
+
+BuildHaikuPackage $(butterfsPackage) : butterfs ;

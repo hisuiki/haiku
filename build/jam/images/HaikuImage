@@ -21,6 +21,8 @@ AddPackageFilesToHaikuImage system packages :
 	haiku.hpkg
 	haiku_datatranslators.hpkg
 	haiku_$(TARGET_PACKAGING_ARCHS[2-]).hpkg
+	extfs.hpkg
+	butterfs.hpkg
 	intel_bluetooth_firmwares.hpkg
 	:
 	nameFromMetaInfo
