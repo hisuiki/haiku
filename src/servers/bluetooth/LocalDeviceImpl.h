@@ -73,6 +73,7 @@ public:
 private:
 
 	RemoteDevicesList	fRemoteDevicesList;
+	bool				fRemoteDevicesLoaded;
 
 	void SaveRemoteDevices();
 	void LoadRemoteDevices();

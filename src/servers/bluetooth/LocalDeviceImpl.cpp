@@ -91,7 +91,10 @@ LocalDeviceImpl::CreateTransportAccessor(BPath* path)
 }
 
 
-LocalDeviceImpl::LocalDeviceImpl(HCIDelegate* hd) : LocalDeviceHandler(hd)
+LocalDeviceImpl::LocalDeviceImpl(HCIDelegate* hd)
+	:
+	LocalDeviceHandler(hd),
+	fRemoteDevicesLoaded(true)
 {
 	LoadRemoteDevices();
 }
@@ -120,6 +123,9 @@ LocalDeviceImpl::Unregister()
 void
 LocalDeviceImpl::SaveRemoteDevices()
 {
+	if (!fRemoteDevicesLoaded)
+		return;
+
 	BMessage devices;
 
 	for (int32 i = 0; i < fRemoteDevicesList.CountItems(); i++) {
@@ -143,9 +149,10 @@ LocalDeviceImpl::SaveRemoteDevices()
 	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) == B_OK) {
 		path.Append("Bluetooth_paired_devices");
 		BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
-		if (file.InitCheck()==B_OK) {
+		if (file.InitCheck() == B_OK) {
 			chmod(path.Path(), S_IRUSR | S_IWUSR);
-			devices.Flatten(&file);
+			if (devices.Flatten(&file) != B_OK)
+				TRACE_BT("LocalDeviceImpl: failed saving paired devices\n");
 		}
 	}
 }
@@ -159,24 +166,46 @@ LocalDeviceImpl::LoadRemoteDevices()
 	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) == B_OK) {
 		path.Append("Bluetooth_paired_devices");
 		BFile file(path.Path(), B_READ_ONLY);
-		if (file.InitCheck()==B_OK)
-			devices.Unflatten(&file);
+		if (file.InitCheck() == B_OK && devices.Unflatten(&file) != B_OK) {
+			// Do not replace an unreadable pairing database with an empty one
+			// when the server later exits.
+			TRACE_BT("LocalDeviceImpl: cannot read paired devices from %s\n",
+				path.Path());
+			fRemoteDevicesLoaded = false;
+			return;
+		}
 	}
 
 	BMessage device;
 	for (int32 i = 0; devices.FindMessage("remote", i, &device) == B_OK; i++) {
-		ServerRemoteDevice* rd = new ServerRemoteDevice();
+		ServerRemoteDevice* rd = new(std::nothrow) ServerRemoteDevice();
+		if (rd == NULL)
+			break;
+
 		ssize_t size;
 		bdaddr_t* bdaddr;
-		device.FindData("bdaddr", B_ANY_TYPE, (const void**)&bdaddr, &size);
+		if (device.FindData("bdaddr", B_ANY_TYPE, (const void**)&bdaddr, &size)
+			!= B_OK || size != sizeof(*bdaddr)) {
+			delete rd;
+			continue;
+		}
 		rd->bdaddr = *bdaddr;
 		device.FindString("name", &rd->friendly_name);
 		device.FindUInt16("clock_offset", &rd->clock_offset);
 		device.FindUInt8("pscan_rep_mode", &rd->pscan_rep_mode);
-		device.FindUInt8("class_of_device", 0, &rd->classOfDevice[0]);
-		device.FindUInt8("class_of_device", 1, &rd->classOfDevice[1]);
-		device.FindUInt8("class_of_device", 2, &rd->classOfDevice[2]);
-		device.FindData("link key", B_ANY_TYPE, (const void**)&rd->link_key, &size);
+		const void* classOfDevice;
+		if (device.FindData("class_of_device", B_ANY_TYPE, &classOfDevice, &size)
+			== B_OK && size == sizeof(rd->classOfDevice))
+			memcpy(rd->classOfDevice, classOfDevice, sizeof(rd->classOfDevice));
+		else
+			memset(rd->classOfDevice, 0, sizeof(rd->classOfDevice));
+
+		const void* linkKey;
+		if (device.FindData("link key", B_ANY_TYPE, &linkKey, &size) == B_OK
+			&& size == sizeof(rd->link_key))
+			memcpy(&rd->link_key, linkKey, sizeof(rd->link_key));
+		else
+			rd->link_key = LinkKeyUtils::NullKey();
 		device.FindUInt8("link type", &rd->link_type);
 		rd->conn_state = RemoteDevice::DISCONNECTED;
 
@@ -212,14 +241,16 @@ LocalDeviceImpl::RemoteDeviceByHandle(uint16 handle)
 void
 LocalDeviceImpl::AddRemoteDevice(ServerRemoteDevice* rd)
 {
-	fRemoteDevicesList.AddItem(rd);
+	if (rd != NULL && RemoteDeviceByAddr(rd->bdaddr) == NULL)
+		fRemoteDevicesList.AddItem(rd);
 }
 
 
 void
 LocalDeviceImpl::RemoveRemoteDevice(ServerRemoteDevice* rd)
 {
-	fRemoteDevicesList.RemoveItem(rd);
+	if (rd != NULL && fRemoteDevicesList.RemoveItem(rd))
+		SaveRemoteDevices();
 }
 
 
@@ -1576,7 +1607,8 @@ LocalDeviceImpl::ConnectionRequest(struct hci_ev_conn_request* event,
 			sizeof(serverRd->classOfDevice));
 
 		((BluetoothServer*)be_app)->NotifyWatchers(&notice);
-		AddRemoteDevice(serverRd);
+		if (RemoteDeviceByAddr(event->bdaddr) == NULL)
+			AddRemoteDevice(serverRd);
 
 		// Keep ourselves as slave
 		command = buildAcceptConnectionRequest(event->bdaddr, 0x01 , &size);
@@ -1645,7 +1677,8 @@ LocalDeviceImpl::CreateConnection(BMessage* message)
 	rdConn->bdaddr_type = LE_PUBLIC_ADDRESS;
 	message->FindUInt8("bdaddr_type", &rdConn->bdaddr_type);
 
-	AddRemoteDevice(rdConn);
+	if (RemoteDeviceByAddr(*bdaddr) == NULL)
+		AddRemoteDevice(rdConn);
 
 	// A Low Energy peripheral is never paged. It is reached by initiating a
 	// connection to the address it advertised from, which is a different
@@ -1849,9 +1882,9 @@ LocalDeviceImpl::ConnectionComplete(struct hci_ev_conn_complete* event)
 		reply.what = BT_MSG_CONN_COMPLETED;
 	} else {
 		linkkey_t nullLinkKey = LinkKeyUtils::NullKey();
-		if (LinkKeyUtils::Compare(&rd->link_key, &nullLinkKey))
+		if (rd != NULL && LinkKeyUtils::Compare(&rd->link_key, &nullLinkKey))
 			RemoveRemoteDevice(rd);
-		else
+		else if (rd != NULL)
 			rd->conn_state = RemoteDevice::DISCONNECTED;
 
 		TRACE_BT("LocalDeviceImpl: %s: failed with error %s\n", __FUNCTION__,

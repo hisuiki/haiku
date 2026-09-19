@@ -279,8 +279,6 @@ l2cap_receive_data(net_buffer* buffer)
 	uint16 length = le16toh(bufferHeader->length);
 	uint16 dcid = le16toh(bufferHeader->dcid);
 
-	TRACE("%s: len=%d cid=%x\n", __func__, length, dcid);
-
 	bufferHeader.Remove();
 
 	if (length != buffer->size) {
