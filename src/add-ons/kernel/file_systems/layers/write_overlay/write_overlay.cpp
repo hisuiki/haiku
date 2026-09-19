@@ -14,6 +14,8 @@
 
 #include <util/kernel_cpp.h>
 #include <util/AutoLock.h>
+#include <util/OpenHashTable.h>
+#include <lock.h>
 
 #include <fs_cache.h>
 #include <fs_info.h>
@@ -63,14 +65,7 @@ struct overlay_dirent {
 	char *			name;
 	OverlayInode *	node; // only for attributes
 
-	void			remove_and_dispose(fs_volume *volume, ino_t directoryInode)
-					{
-						notify_entry_removed(volume->id, directoryInode,
-							name, inode_number);
-						remove_vnode(volume, inode_number);
-						free(name);
-						free(this);
-					}
+	void			remove_and_dispose(fs_volume *volume, ino_t directoryInode);
 
 	void			dispose_attribute(fs_volume *volume, ino_t fileInode)
 					{
@@ -86,23 +81,65 @@ struct write_buffer {
 	write_buffer *	next;
 	off_t			position;
 	size_t			length;
+	size_t			capacity;
 	uint8			buffer[1];
+};
+
+
+// Appends go into the spare room of the chunk they continue, and a full chunk
+// is followed by one twice its size, so a large file ends up in a few big
+// chunks rather than one per write.
+static const size_t kMaxWriteBufferCapacity = 1024 * 1024;
+
+
+static write_buffer*
+allocate_write_buffer(size_t length, size_t capacity)
+{
+	capacity = max_c(length, capacity);
+	write_buffer* buffer = (write_buffer*)malloc(sizeof(write_buffer) - 1
+		+ capacity);
+	if (buffer != NULL)
+		buffer->capacity = capacity;
+	return buffer;
+}
+
+
+struct OverlayInodeHash {
+	typedef ino_t			KeyType;
+	typedef OverlayInode	ValueType;
+
+	size_t HashKey(KeyType key) const
+	{
+		return (size_t)(key ^ (key >> 32));
+	}
+
+	size_t Hash(ValueType* value) const;
+	bool Compare(KeyType key, ValueType* value) const;
+	ValueType*& GetLink(ValueType* value) const;
 };
 
 
 class OverlayVolume {
 public:
-							OverlayVolume(fs_volume *volume);
+							OverlayVolume(fs_volume *volume, bool noLeak = false);
 							~OverlayVolume();
 
 		fs_volume *			Volume() { return fVolume; }
 		fs_volume *			SuperVolume() { return fVolume->super_volume; }
 
 		ino_t				BuildInodeNumber() { return fCurrentInodeNumber++; }
+		bool				NoLeak() const { return fNoLeak; }
+
+		status_t			RegisterNode(OverlayInode* node);
+		void				UnregisterNode(OverlayInode* node);
+		OverlayInode*		FindNode(ino_t inodeNumber);
 
 private:
 		fs_volume *			fVolume;
 		ino_t				fCurrentInodeNumber;
+		bool				fNoLeak;
+		mutex				fLock;
+		BOpenHashTable<OverlayInodeHash> fNodes;
 };
 
 
@@ -140,7 +177,7 @@ public:
 		void				CreateCache();
 
 		void				SetParentDir(OverlayInode *parentDir);
-		OverlayInode *		ParentDir() { return fParentDir; }
+		ino_t				ParentInodeNumber() { return fParentInode; }
 
 		bool				IsNonEmptyDirectory();
 
@@ -149,8 +186,10 @@ public:
 								OverlayInode **node);
 
 		void				SetName(const char *name);
+		const char *		Name() const { return fName; }
 		status_t			GetName(char *buffer, size_t bufferSize);
 
+		status_t			Access(int mode);
 		status_t			ReadStat(struct stat *stat);
 		status_t			WriteStat(const struct stat *stat, uint32 statMask);
 
@@ -173,6 +212,11 @@ public:
 		status_t			SetFlags(void *cookie, int flags);
 
 		status_t			CreateDir(const char *name, int perms);
+		status_t			EntryIsDirectory(const char *name,
+								bool &isDirectory);
+		status_t			AddHardLink(const char *name,
+								OverlayInode *target);
+		void				ChangeLinkCount(int32 delta);
 		status_t			RemoveDir(const char *name);
 		status_t			OpenDir(void **cookie, bool attribute = false);
 		status_t			CloseDir(void *cookie);
@@ -184,6 +228,8 @@ public:
 
 		status_t			CreateSymlink(const char *name, const char *path,
 								int mode);
+		status_t			CreateSpecialNode(const char *name, int mode,
+								ino_t *newInodeNumber, OverlayInode **_node);
 		status_t			ReadSymlink(char *buffer, size_t *bufferSize);
 
 		status_t			AddEntry(overlay_dirent *entry,
@@ -192,7 +238,10 @@ public:
 								overlay_dirent **entry, bool attribute = false);
 
 private:
+		bool				_DropLink(overlay_dirent *entry);
 		void				_TrimBuffers();
+		void				_Written(off_t end);
+		void				_ResizeCache();
 
 		status_t			_PopulateStat();
 		status_t			_PopulateDirents();
@@ -203,7 +252,7 @@ private:
 
 		recursive_lock		fLock;
 		OverlayVolume *		fVolume;
-		OverlayInode *		fParentDir;
+		ino_t				fParentInode;
 		const char *		fName;
 		fs_vnode			fSuperVnode;
 		ino_t				fInodeNumber;
@@ -222,21 +271,105 @@ private:
 		bool				fIsModified;
 		bool				fIsDataModified;
 		void *				fFileCache;
+public:
+		OverlayInode *		fNextHashNode;
 };
+
+
+inline size_t
+OverlayInodeHash::Hash(OverlayInode* value) const
+{
+	return HashKey(value->InodeNumber());
+}
+
+
+inline bool
+OverlayInodeHash::Compare(ino_t key, OverlayInode* value) const
+{
+	return value->InodeNumber() == key;
+}
+
+
+inline OverlayInode*&
+OverlayInodeHash::GetLink(OverlayInode* value) const
+{
+	return value->fNextHashNode;
+}
 
 
 //	#pragma mark OverlayVolume
 
 
-OverlayVolume::OverlayVolume(fs_volume *volume)
+OverlayVolume::OverlayVolume(fs_volume *volume, bool noLeak)
 	:	fVolume(volume),
-		fCurrentInodeNumber((ino_t)1 << 60)
+		fCurrentInodeNumber((ino_t)1 << 60),
+		fNoLeak(noLeak)
 {
+	mutex_init(&fLock, "write overlay volume node lock");
+	fNodes.Init();
 }
 
 
 OverlayVolume::~OverlayVolume()
 {
+	MutexLocker locker(fLock);
+	OverlayInode *node = fNodes.Clear(true);
+	locker.Unlock();
+
+	while (node != NULL) {
+		OverlayInode *next = node->fNextHashNode;
+		delete node;
+		node = next;
+	}
+
+	mutex_destroy(&fLock);
+}
+
+
+status_t
+OverlayVolume::RegisterNode(OverlayInode* node)
+{
+	MutexLocker locker(fLock);
+	if (fNodes.Lookup(node->InodeNumber()) != NULL)
+		return B_OK;
+
+	return fNodes.Insert(node);
+}
+
+
+void
+OverlayVolume::UnregisterNode(OverlayInode* node)
+{
+	MutexLocker locker(fLock);
+	fNodes.Remove(node);
+}
+
+
+OverlayInode*
+OverlayVolume::FindNode(ino_t inodeNumber)
+{
+	MutexLocker locker(fLock);
+	return fNodes.Lookup(inodeNumber);
+}
+
+
+void
+overlay_dirent::remove_and_dispose(fs_volume *volume, ino_t directoryInode)
+{
+	notify_entry_removed(volume->id, directoryInode, name, inode_number);
+	status_t status = remove_vnode(volume, inode_number);
+	if (status == B_ENTRY_NOT_FOUND) {
+		OverlayVolume *overlayVolume = (OverlayVolume *)volume->private_volume;
+		if (overlayVolume != NULL) {
+			OverlayInode *node = overlayVolume->FindNode(inode_number);
+			if (node != NULL) {
+				overlayVolume->UnregisterNode(node);
+				delete node;
+			}
+		}
+	}
+	free(name);
+	free(this);
 }
 
 
@@ -247,7 +380,7 @@ OverlayInode::OverlayInode(OverlayVolume *volume, fs_vnode *superVnode,
 	ino_t inodeNumber, OverlayInode *parentDir, const char *name, mode_t mode,
 	bool attribute, type_code attributeType)
 	:	fVolume(volume),
-		fParentDir(parentDir),
+		fParentInode(parentDir != NULL ? parentDir->InodeNumber() : 0),
 		fName(name),
 		fInodeNumber(inodeNumber),
 		fWriteBuffers(NULL),
@@ -263,7 +396,8 @@ OverlayInode::OverlayInode(OverlayVolume *volume, fs_vnode *superVnode,
 		fIsAttribute(attribute),
 		fIsModified(false),
 		fIsDataModified(false),
-		fFileCache(NULL)
+		fFileCache(NULL),
+		fNextHashNode(NULL)
 {
 	TRACE("inode created %" B_PRIdINO "\n", fInodeNumber);
 
@@ -275,8 +409,8 @@ OverlayInode::OverlayInode(OverlayVolume *volume, fs_vnode *superVnode,
 		fStat.st_ino = fInodeNumber;
 		fStat.st_mode = mode;
 		fStat.st_nlink = 1;
-		fStat.st_uid = 0;
-		fStat.st_gid = 0;
+		fStat.st_uid = geteuid();
+		fStat.st_gid = getegid();
 		fStat.st_size = 0;
 		fStat.st_rdev = 0;
 		fStat.st_blksize = 1024;
@@ -348,12 +482,7 @@ OverlayInode::SetModified()
 		return;
 	}
 
-	// we must ensure that a modified node never get's put, as we cannot get it
-	// from the underlying filesystem, so we get an additional reference here
-	// and deliberately leak it
-	// TODO: what about non-force unmounting then?
-	void *unused = NULL;
-	get_vnode(Volume(), fInodeNumber, &unused);
+	fVolume->RegisterNode(this);
 	fIsModified = true;
 }
 
@@ -382,9 +511,9 @@ void
 OverlayInode::SetParentDir(OverlayInode *parentDir)
 {
 	RecursiveLocker locker(fLock);
-	fParentDir = parentDir;
+	fParentInode = parentDir != NULL ? parentDir->InodeNumber() : 0;
 	if (fHasDirents && fDirentCount >= 2)
-		fDirents[1]->inode_number = parentDir->InodeNumber();
+		fDirents[1]->inode_number = fParentInode;
 }
 
 
@@ -507,6 +636,24 @@ OverlayInode::ReadStat(struct stat *stat)
 }
 
 
+/*!	Decides access from the overlay's own metadata.
+
+	Once a node is in the overlay its ownership and mode are the overlay's to
+	answer for: the file below may still carry whatever the image shipped, and
+	asking it would deny a write the overlay has already granted.
+*/
+status_t
+OverlayInode::Access(int mode)
+{
+	RecursiveLocker locker(fLock);
+	if (!fHasStat)
+		_PopulateStat();
+
+	return check_access_permissions(mode, fStat.st_mode, fStat.st_gid,
+		fStat.st_uid);
+}
+
+
 status_t
 OverlayInode::WriteStat(const struct stat *stat, uint32 statMask)
 {
@@ -523,6 +670,7 @@ OverlayInode::WriteStat(const struct stat *stat, uint32 statMask)
 			if (!fIsDataModified)
 				SetDataModified();
 			_TrimBuffers();
+			_ResizeCache();
 		}
 	}
 
@@ -557,12 +705,26 @@ OverlayInode::Create(const char *name, int openMode, int perms, void **cookie,
 	ino_t *newInodeNumber, bool attribute, type_code attributeType)
 {
 	OverlayInode *newNode = NULL;
+	ino_t inodeNumber = 0;
 	status_t result = _CreateCommon(name, attribute ? S_ATTR : S_IFREG, perms,
-		newInodeNumber, &newNode, attribute, attributeType, (openMode & O_EXCL) != 0);
+		&inodeNumber, &newNode, attribute, attributeType, (openMode & O_EXCL) != 0);
 	if (result != B_OK)
 		return result;
 
-	return newNode->Open(openMode, cookie);
+	if (newInodeNumber != NULL)
+		*newInodeNumber = inodeNumber;
+
+	result = newNode->Open(openMode, cookie);
+	if (result != B_OK && !attribute) {
+		// The publish_vnode() in _CreateCommon() handed over a reference that
+		// only a create which returns B_OK passes on to its caller. Nothing
+		// would ever drop it otherwise, and the entry it names has to go with
+		// it: a create that failed must not leave the file behind.
+		RemoveEntry(name, NULL);
+		put_vnode(Volume(), inodeNumber);
+	}
+
+	return result;
 }
 
 
@@ -585,6 +747,7 @@ OverlayInode::Open(int openMode, void **_cookie)
 		if ((openMode & O_TRUNC) && fStat.st_size != 0) {
 			fStat.st_size = 0;
 			_TrimBuffers();
+			_ResizeCache();
 
 			notify_stat_changed(SuperVolume()->id, -1, fInodeNumber, B_STAT_SIZE);
 		}
@@ -600,6 +763,7 @@ OverlayInode::Open(int openMode, void **_cookie)
 		if (fStat.st_size != 0) {
 			fStat.st_size = 0;
 			_TrimBuffers();
+			_ResizeCache();
 			if (!fIsDataModified)
 				SetDataModified();
 
@@ -615,6 +779,16 @@ OverlayInode::Open(int openMode, void **_cookie)
 	} else {
 		result = fSuperVnode.ops->open(SuperVolume(), &fSuperVnode,
 			openMode, &cookie->super_cookie);
+	}
+
+	if (result == B_PERMISSION_DENIED && !fIsAttribute
+		&& Access(R_OK) == B_OK) {
+		// The overlay has already granted the access; the file below is only
+		// where the untouched parts of the contents come from, and its own
+		// ownership is not what this node's is any more. Reading it needs no
+		// cookie.
+		cookie->super_cookie = NULL;
+		result = B_OK;
 	}
 
 	if (result != B_OK) {
@@ -649,6 +823,9 @@ OverlayInode::Close(void *_cookie)
 		return B_OK;
 
 	open_cookie *cookie = (open_cookie *)_cookie;
+	if (cookie->super_cookie == NULL)
+		return B_OK;
+
 	if (fIsAttribute) {
 		return fSuperVnode.ops->close_attr(SuperVolume(), &fSuperVnode,
 			cookie->super_cookie);
@@ -664,7 +841,7 @@ OverlayInode::FreeCookie(void *_cookie)
 {
 	status_t result = B_OK;
 	open_cookie *cookie = (open_cookie *)_cookie;
-	if (!fIsVirtual) {
+	if (!fIsVirtual && cookie->super_cookie != NULL) {
 		if (fIsAttribute) {
 			result = fSuperVnode.ops->free_attr_cookie(SuperVolume(),
 				&fSuperVnode, cookie->super_cookie);
@@ -812,6 +989,7 @@ OverlayInode::Write(void *_cookie, off_t position, const void *buffer,
 	// find insertion point
 	write_buffer **link = &fWriteBuffers;
 	write_buffer *other = fWriteBuffers;
+	write_buffer *previous = NULL;
 	write_buffer *swallow = NULL;
 	off_t newPosition = position;
 	size_t newLength = length;
@@ -820,14 +998,29 @@ OverlayInode::Write(void *_cookie, off_t position, const void *buffer,
 	while (other) {
 		off_t newEnd = newPosition + newLength;
 		off_t otherEnd = other->position + other->length;
-		if (otherEnd < newPosition) {
-			// other is completely before us
+		if (otherEnd <= newPosition) {
+			if (otherEnd == position
+				&& other->capacity - other->length >= length
+				&& (other->next == NULL
+					|| other->next->position >= position + (off_t)length)) {
+				void *target = other->buffer + other->length;
+				if (ioRequest != NULL)
+					ioRequest->CopyData(ioRequest->Offset(), target, length);
+				else if (user_memcpy(target, buffer, length) < B_OK)
+					return B_BAD_ADDRESS;
+
+				other->length += length;
+				_Written(position + length);
+				return B_OK;
+			}
+
+			previous = other;
 			link = &other->next;
 			other = other->next;
 			continue;
 		}
 
-		if (other->position > newEnd) {
+		if (other->position >= newEnd) {
 			// other is completely past us
 			break;
 		}
@@ -845,14 +1038,7 @@ OverlayInode::Write(void *_cookie, off_t position, const void *buffer,
 				else if (user_memcpy(target, buffer, length) < B_OK)
 					return B_BAD_ADDRESS;
 
-				fStat.st_mtime = time(NULL);
-				if (fIsAttribute) {
-					notify_attribute_changed(SuperVolume()->id, -1,
-						fInodeNumber, fName, B_ATTR_CHANGED);
-				} else {
-					notify_stat_changed(SuperVolume()->id, -1, fInodeNumber,
-						B_STAT_MODIFICATION_TIME);
-				}
+				_Written(position + length);
 				return B_OK;
 			}
 
@@ -866,8 +1052,15 @@ OverlayInode::Write(void *_cookie, off_t position, const void *buffer,
 		other = other->next;
 	}
 
-	write_buffer *element = (write_buffer *)malloc(sizeof(write_buffer) - 1
-		+ newLength);
+	size_t capacity = newLength;
+	if (swallowCount == 0 && previous != NULL
+		&& previous->position + (off_t)previous->length == newPosition) {
+		capacity = min_c(previous->capacity * 2, kMaxWriteBufferCapacity);
+		if (*link != NULL)
+			capacity = min_c(capacity, (size_t)((*link)->position - newPosition));
+	}
+
+	write_buffer *element = allocate_write_buffer(newLength, capacity);
 	if (element == NULL)
 		return B_NO_MEMORY;
 
@@ -875,16 +1068,6 @@ OverlayInode::Write(void *_cookie, off_t position, const void *buffer,
 	element->position = newPosition;
 	element->length = newLength;
 	*link = element;
-
-	bool sizeChanged = false;
-	off_t newEnd = newPosition + newLength;
-	if (newEnd > fStat.st_size) {
-		fStat.st_size = newEnd;
-		sizeChanged = true;
-
-		if (fFileCache)
-			file_cache_set_size(fFileCache, newEnd);
-	}
 
 	// populate the buffer with the existing chunks
 	if (swallowCount > 0) {
@@ -900,9 +1083,25 @@ OverlayInode::Write(void *_cookie, off_t position, const void *buffer,
 
 	void *target = element->buffer + (position - newPosition);
 	if (ioRequest != NULL)
-		ioRequest->CopyData(0, target, length);
+		ioRequest->CopyData(ioRequest->Offset(), target, length);
 	else if (user_memcpy(target, buffer, length) < B_OK)
 		return B_BAD_ADDRESS;
+
+	_Written(position + length);
+	return B_OK;
+}
+
+
+void
+OverlayInode::_Written(off_t end)
+{
+	bool sizeChanged = false;
+	if (end > fStat.st_size) {
+		fStat.st_size = end;
+		sizeChanged = true;
+		if (fFileCache)
+			file_cache_set_size(fFileCache, end);
+	}
 
 	fStat.st_mtime = time(NULL);
 
@@ -913,8 +1112,6 @@ OverlayInode::Write(void *_cookie, off_t position, const void *buffer,
 		notify_stat_changed(SuperVolume()->id, -1, fInodeNumber,
 			B_STAT_MODIFICATION_TIME | (sizeChanged ? B_STAT_SIZE : 0));
 	}
-
-	return B_OK;
 }
 
 
@@ -949,14 +1146,64 @@ OverlayInode::SetFlags(void *_cookie, int flags)
 status_t
 OverlayInode::CreateDir(const char *name, int perms)
 {
-	return _CreateCommon(name, S_IFDIR, perms, NULL, NULL, false, 0);
+	ino_t newInodeNumber;
+	status_t result = _CreateCommon(name, S_IFDIR, perms, &newInodeNumber, NULL, false, 0);
+	if (result == B_OK)
+		put_vnode(fVolume->Volume(), newInodeNumber);
+	return result;
 }
 
 
 status_t
 OverlayInode::RemoveDir(const char *name)
 {
+	// rmdir() has to refuse anything that is not a directory, and say so:
+	// dpkg, among others, tells the two apart by trying it and looking for
+	// ENOTDIR, so removing the file instead loses it.
+	bool isDirectory = false;
+	status_t result = EntryIsDirectory(name, isDirectory);
+	if (result != B_OK)
+		return result;
+	if (!isDirectory)
+		return B_NOT_A_DIRECTORY;
+
 	return RemoveEntry(name, NULL);
+}
+
+
+/*!	Whether the entry \a name of this directory is itself a directory. */
+status_t
+OverlayInode::EntryIsDirectory(const char *name, bool &isDirectory)
+{
+	ino_t inodeNumber = -1;
+	{
+		RecursiveLocker locker(fLock);
+		if (!fHasDirents)
+			_PopulateDirents();
+
+		for (uint32 i = 0; i < fDirentCount; i++) {
+			if (strcmp(fDirents[i]->name, name) == 0) {
+				inodeNumber = fDirents[i]->inode_number;
+				break;
+			}
+		}
+	}
+
+	if (inodeNumber < 0)
+		return B_ENTRY_NOT_FOUND;
+
+	OverlayInode *node = NULL;
+	status_t result = get_vnode(Volume(), inodeNumber, (void **)&node);
+	if (result != B_OK)
+		return result;
+
+	struct stat stat;
+	result = node->ReadStat(&stat);
+	if (result == B_OK)
+		isDirectory = S_ISDIR(stat.st_mode);
+
+	put_vnode(Volume(), inodeNumber);
+	return result;
 }
 
 
@@ -1042,17 +1289,107 @@ OverlayInode::RewindDir(void *cookie)
 }
 
 
+/*!	Adds \a name as another name for \a target.
+
+	A hard link inside the overlay is a second directory entry with the same
+	inode number: both names then resolve to the one OverlayInode, so they
+	share its contents and whatever lies beneath it, which is what a hard link
+	means. The file below is never touched, so this works even where the
+	filesystem underneath has no links of its own.
+*/
+status_t
+OverlayInode::AddHardLink(const char *name, OverlayInode *target)
+{
+	if (target == NULL || target == this)
+		return B_NOT_ALLOWED;
+
+	struct stat targetStat;
+	status_t result = target->ReadStat(&targetStat);
+	if (result != B_OK)
+		return result;
+	if (S_ISDIR(targetStat.st_mode))
+		return B_NOT_ALLOWED;
+
+	{
+		RecursiveLocker locker(fLock);
+		if (!fHasStat)
+			_PopulateStat();
+		if (!S_ISDIR(fStat.st_mode))
+			return B_NOT_A_DIRECTORY;
+	}
+
+	ino_t existing;
+	if (Lookup(name, &existing) == B_OK) {
+		put_vnode(Volume(), existing);
+		return B_FILE_EXISTS;
+	}
+
+	overlay_dirent *entry = (overlay_dirent *)malloc(sizeof(overlay_dirent));
+	if (entry == NULL)
+		return B_NO_MEMORY;
+
+	entry->node = NULL;
+	entry->inode_number = target->InodeNumber();
+	entry->name = strdup(name);
+	if (entry->name == NULL) {
+		free(entry);
+		return B_NO_MEMORY;
+	}
+
+	result = AddEntry(entry);
+	if (result != B_OK) {
+		free(entry->name);
+		free(entry);
+		return result;
+	}
+
+	target->ChangeLinkCount(1);
+	notify_entry_created(SuperVolume()->id, fInodeNumber, entry->name,
+		entry->inode_number);
+	return B_OK;
+}
+
+
+void
+OverlayInode::ChangeLinkCount(int32 delta)
+{
+	RecursiveLocker locker(fLock);
+	if (!fHasStat)
+		_PopulateStat();
+
+	if (delta < 0 && fStat.st_nlink < (nlink_t)(-delta))
+		fStat.st_nlink = 0;
+	else
+		fStat.st_nlink += delta;
+
+	if (!fIsModified)
+		SetModified();
+}
+
+
+status_t
+OverlayInode::CreateSpecialNode(const char *name, int mode,
+	ino_t *newInodeNumber, OverlayInode **_node)
+{
+	return _CreateCommon(name, mode & S_IFMT, mode & S_IUMSK, newInodeNumber,
+		_node, false, 0, true);
+}
+
+
 status_t
 OverlayInode::CreateSymlink(const char *name, const char *path, int mode)
 {
 	OverlayInode *newNode = NULL;
+	ino_t newInodeNumber;
 	// TODO: find out why mode is ignored
-	status_t result = _CreateCommon(name, S_IFLNK, 0777, NULL, &newNode,
+	status_t result = _CreateCommon(name, S_IFLNK, 0777, &newInodeNumber, &newNode,
 		false, 0);
 	if (result != B_OK)
 		return result;
 
-	return newNode->Write(NULL, 0, path, strlen(path), NULL);
+	result = newNode->Write(NULL, 0, path, strlen(path), NULL);
+	put_vnode(fVolume->Volume(), newInodeNumber);
+	return result;
 }
 
 
@@ -1155,7 +1492,7 @@ OverlayInode::RemoveEntry(const char *name, overlay_dirent **_entry,
 				*_entry = entry;
 			else if (attribute)
 				entry->dispose_attribute(Volume(), fInodeNumber);
-			else
+			else if (!_DropLink(entry))
 				entry->remove_and_dispose(Volume(), fInodeNumber);
 
 			if (!fIsModified)
@@ -1166,6 +1503,55 @@ OverlayInode::RemoveEntry(const char *name, overlay_dirent **_entry,
 	}
 
 	return B_ENTRY_NOT_FOUND;
+}
+
+
+/*!	Drops the cached pages past the current size.
+
+	Shrinking a file leaves its old contents in the page cache, and a mapping
+	made afterwards - running an executable that was just overwritten, say -
+	would be served those pages rather than what was written. Handing the new
+	size to the file cache is what discards them.
+*/
+/*!	Accounts for one of \a entry's names going away.
+
+	Returns true when the node is still reachable under another name, in which
+	case only the link count changes and the entry itself is freed; false when
+	this was the last one and the caller has to dispose of the node.
+*/
+bool
+OverlayInode::_DropLink(overlay_dirent *entry)
+{
+	OverlayInode *node = NULL;
+	if (get_vnode(Volume(), entry->inode_number, (void **)&node) != B_OK)
+		return false;
+	if (node == NULL) {
+		put_vnode(Volume(), entry->inode_number);
+		return false;
+	}
+
+	struct stat stat;
+	bool remaining = node->ReadStat(&stat) == B_OK && stat.st_nlink > 1;
+	if (remaining)
+		node->ChangeLinkCount(-1);
+	put_vnode(Volume(), entry->inode_number);
+
+	if (!remaining)
+		return false;
+
+	notify_entry_removed(Volume()->id, fInodeNumber, entry->name,
+		entry->inode_number);
+	free(entry->name);
+	free(entry);
+	return true;
+}
+
+
+void
+OverlayInode::_ResizeCache()
+{
+	if (fFileCache != NULL)
+		file_cache_set_size(fFileCache, fStat.st_size);
 }
 
 
@@ -1199,6 +1585,7 @@ OverlayInode::_TrimBuffers()
 
 		if (newBuffer != NULL) {
 			buffer = newBuffer;
+			buffer->capacity = newLength;
 			*link = newBuffer;
 		} else {
 			// we don't really care if it worked, if it didn't we simply
@@ -1270,8 +1657,7 @@ OverlayInode::_PopulateDirents()
 		return B_NO_MEMORY;
 
 	const char *names[] = { ".", ".." };
-	ino_t inodes[] = { fInodeNumber,
-		fParentDir != NULL ? fParentDir->InodeNumber() : 0 };
+	ino_t inodes[] = { fInodeNumber, fParentInode };
 	for (uint32 i = 0; i < 2; i++) {
 		fDirents[i] = (overlay_dirent *)malloc(sizeof(overlay_dirent));
 		if (fDirents[i] == NULL)
@@ -1459,10 +1845,14 @@ OverlayInode::_CreateCommon(const char *name, int type, int perms,
 		ino_t lookupInodeNumber;
 		result = Lookup(name, &lookupInodeNumber);
 
-		if (result != B_ENTRY_NOT_FOUND) {
+		if (result == B_OK) {
 			put_vnode(Volume(), lookupInodeNumber);
 			return B_FILE_EXISTS;
 		}
+		// Only a successful lookup leaves a reference to release, and only it
+		// proves the name is taken; anything else is its own error.
+		if (result != B_ENTRY_NOT_FOUND)
+			return result;
 	}
 
 	overlay_dirent *entry = (overlay_dirent *)malloc(sizeof(overlay_dirent));
@@ -1506,6 +1896,7 @@ OverlayInode::_CreateCommon(const char *name, int type, int perms,
 			delete node;
 			return result;
 		}
+		fVolume->RegisterNode(node);
 	} else
 		entry->node = node;
 
@@ -1551,15 +1942,30 @@ overlay_put_vnode(fs_volume *volume, fs_vnode *vnode, bool reenter)
 {
 	TRACE("put_vnode\n");
 	OverlayInode *node = (OverlayInode *)vnode->private_node;
-	if (node->IsVirtual() || node->IsModified()) {
-		panic("loosing virtual/modified node\n");
-		delete node;
+	OverlayVolume *overlayVolume = (OverlayVolume *)volume->private_volume;
+
+	if (overlayVolume != NULL && overlayVolume->FindNode(node->InodeNumber()) != NULL) {
+		if (!node->IsVirtual()) {
+			fs_vnode *superVnode = node->SuperVnode();
+			if (superVnode != NULL && superVnode->ops != NULL
+				&& superVnode->ops->put_vnode != NULL) {
+				superVnode->ops->put_vnode(volume->super_volume, superVnode,
+					reenter);
+			}
+		}
 		return B_OK;
+	}
+
+	if (node->IsVirtual() || node->IsModified()) {
+		if (overlayVolume == NULL || !overlayVolume->NoLeak()) {
+			panic("loosing virtual/modified node\n");
+		}
 	}
 
 	status_t result = B_OK;
 	fs_vnode *superVnode = node->SuperVnode();
-	if (superVnode->ops->put_vnode != NULL) {
+	if (superVnode != NULL && superVnode->ops != NULL
+		&& superVnode->ops->put_vnode != NULL) {
 		result = superVnode->ops->put_vnode(volume->super_volume, superVnode,
 			reenter);
 	}
@@ -1569,19 +1975,28 @@ overlay_put_vnode(fs_volume *volume, fs_vnode *vnode, bool reenter)
 }
 
 
+
 static status_t
 overlay_remove_vnode(fs_volume *volume, fs_vnode *vnode, bool reenter)
 {
 	TRACE("remove_vnode\n");
 	OverlayInode *node = (OverlayInode *)vnode->private_node;
+	OverlayVolume *overlayVolume = (OverlayVolume *)volume->private_volume;
+	if (overlayVolume != NULL)
+		overlayVolume->UnregisterNode(node);
+
 	if (node->IsVirtual()) {
 		delete node;
 		return B_OK;
 	}
 
+	// Only the overlay's own entry goes away here. The file below was never
+	// unlinked - a write copies it up rather than changing it - so removing
+	// its vnode would tear down an inode that is still very much there.
 	status_t result = B_OK;
 	fs_vnode *superVnode = node->SuperVnode();
-	if (superVnode->ops->put_vnode != NULL) {
+	if (superVnode != NULL && superVnode->ops != NULL
+		&& superVnode->ops->put_vnode != NULL) {
 		result = superVnode->ops->put_vnode(volume->super_volume, superVnode,
 			reenter);
 	}
@@ -1816,7 +2231,9 @@ static status_t
 overlay_link(fs_volume *volume, fs_vnode *vnode, const char *name,
 	fs_vnode *target)
 {
-	return B_UNSUPPORTED;
+	TRACE("link: \"%s\"\n", name);
+	OverlayInode *directory = (OverlayInode *)vnode->private_node;
+	return directory->AddHardLink(name, (OverlayInode *)target->private_node);
 }
 
 
@@ -1824,7 +2241,17 @@ static status_t
 overlay_unlink(fs_volume *volume, fs_vnode *vnode, const char *name)
 {
 	TRACE("unlink: \"%s\"\n", name);
-	return ((OverlayInode *)vnode->private_node)->RemoveEntry(name, NULL);
+	OverlayInode *directory = (OverlayInode *)vnode->private_node;
+
+	// The other half of the rule rmdir() follows: unlink() names a file.
+	bool isDirectory = false;
+	status_t result = directory->EntryIsDirectory(name, isDirectory);
+	if (result != B_OK)
+		return result;
+	if (isDirectory)
+		return B_IS_A_DIRECTORY;
+
+	return directory->RemoveEntry(name, NULL);
 }
 
 
@@ -1879,7 +2306,7 @@ overlay_rename(fs_volume *volume, fs_vnode *vnode,
 static status_t
 overlay_access(fs_volume *volume, fs_vnode *vnode, int mode)
 {
-	// TODO: implement
+	// Everything here can be written, because writing copies it up.
 	return B_OK;
 }
 
@@ -2212,7 +2639,27 @@ overlay_create_special_node(fs_volume *volume, fs_vnode *vnode,
 	const char *name, fs_vnode *subVnode, mode_t mode, uint32 flags,
 	fs_vnode *_superVnode, ino_t *nodeID)
 {
-	OVERLAY_CALL(create_special_node, name, subVnode, mode, flags, _superVnode, nodeID)
+	// A socket's node only has to exist, so it lives in the overlay like any
+	// file written there; the layer below may be read-only, and a directory
+	// made in the overlay has nothing below it to relay to at all.
+	if (subVnode != NULL || !S_ISSOCK(mode))
+		return B_UNSUPPORTED;
+
+	OverlayInode *directory = (OverlayInode *)vnode->private_node;
+	status_t result = directory->Access(W_OK);
+	if (result != B_OK)
+		return result;
+
+	OverlayInode *node = NULL;
+	result = directory->CreateSpecialNode(name, mode, nodeID, &node);
+	if (result != B_OK)
+		return result;
+
+	if (_superVnode != NULL) {
+		_superVnode->private_node = node;
+		_superVnode->ops = vnode->ops;
+	}
+	return B_OK;
 }
 
 
@@ -2364,14 +2811,49 @@ overlay_get_vnode(fs_volume *volume, ino_t id, fs_vnode *vnode, int *_type,
 	uint32 *_flags, bool reenter)
 {
 	TRACE_VOLUME("relaying volume op: get_vnode\n");
+	OverlayVolume *overlayVolume = (OverlayVolume *)volume->private_volume;
+	if (overlayVolume == NULL)
+		return B_ERROR;
+
+	OverlayInode *node = overlayVolume->FindNode(id);
+	if (node != NULL) {
+		if (node->IsVirtual()) {
+			struct stat stat;
+			status_t status = node->ReadStat(&stat);
+			if (status != B_OK)
+				return status;
+
+			vnode->private_node = node;
+			vnode->ops = &sOverlayVnodeOps;
+			*_type = stat.st_mode;
+			*_flags = 0;
+			return B_OK;
+		}
+
+		if (volume->super_volume->ops->get_vnode != NULL) {
+			status_t status = volume->super_volume->ops->get_vnode(
+				volume->super_volume, id, vnode, _type, _flags, reenter);
+			if (status != B_OK)
+				return status;
+
+			node->SetSuperVnode(vnode);
+			vnode->private_node = node;
+			vnode->ops = &sOverlayVnodeOps;
+			struct stat stat;
+			if (node->ReadStat(&stat) == B_OK)
+				*_type = stat.st_mode;
+			return B_OK;
+		}
+		return B_UNSUPPORTED;
+	}
+
 	if (volume->super_volume->ops->get_vnode != NULL) {
 		status_t status = volume->super_volume->ops->get_vnode(
 			volume->super_volume, id, vnode, _type, _flags, reenter);
 		if (status != B_OK)
 			return status;
 
-		OverlayInode *node = new(std::nothrow) OverlayInode(
-			(OverlayVolume *)volume->private_volume, vnode, id);
+		node = new(std::nothrow) OverlayInode(overlayVolume, vnode, id);
 		if (node == NULL) {
 			vnode->ops->put_vnode(volume->super_volume, vnode, reenter);
 			return B_NO_MEMORY;
@@ -2576,8 +3058,11 @@ overlay_mount(fs_volume *volume, const char *device, uint32 flags,
 	if (volume->super_volume == NULL)
 		return B_UNSUPPORTED;
 
-	TRACE_VOLUME("mounting write overlay\n");
-	volume->private_volume = new(std::nothrow) OverlayVolume(volume);
+	bool isContainer = (volume->file_system_name != NULL
+		&& strcmp(volume->file_system_name, "container_overlay") == 0);
+	bool noLeak = isContainer || (args != NULL && strstr(args, "noleak") != NULL);
+	TRACE_VOLUME("mounting write overlay (noLeak=%d)\n", noLeak);
+	volume->private_volume = new(std::nothrow) OverlayVolume(volume, noLeak);
 	if (volume->private_volume == NULL)
 		return B_NO_MEMORY;
 
@@ -2642,6 +3127,49 @@ static file_system_module_info sOverlayFileSystem = {
 };
 
 
+static file_system_module_info sContainerOverlayFileSystem = {
+	{
+		"file_systems/container_overlay" B_CURRENT_FS_API_VERSION,
+		0,
+		overlay_std_ops,
+	},
+
+	"container_overlay",				// short_name
+	"Container Overlay File System",	// pretty_name
+	0,								// DDM flags
+
+	// scanning
+	NULL, // identify_partition
+	NULL, // scan_partition
+	NULL, // free_identify_partition_cookie
+	NULL, // free_partition_content_cookie
+
+	// general operations
+	&overlay_mount,
+
+	// capability querying
+	NULL, // get_supported_operations
+
+	NULL, // validate_resize
+	NULL, // validate_move
+	NULL, // validate_set_content_name
+	NULL, // validate_set_content_parameters
+	NULL, // validate_initialize
+
+	// shadow partition modification
+	NULL, // shadow_changed
+
+	// writing
+	NULL, // defragment
+	NULL, // repair
+	NULL, // resize
+	NULL, // move
+	NULL, // set_content_name
+	NULL, // set_content_parameters
+	NULL // initialize
+};
+
+
 status_t
 publish_overlay_vnode(fs_volume *volume, ino_t inodeNumber, void *privateNode,
 	int type)
@@ -2656,5 +3184,6 @@ using namespace write_overlay;
 
 module_info *modules[] = {
 	(module_info *)&sOverlayFileSystem,
+	(module_info *)&sContainerOverlayFileSystem,
 	NULL,
 };

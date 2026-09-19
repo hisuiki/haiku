@@ -6,3 +6,11 @@ SubDirHdrs $(HAIKU_TOP) src system kernel device_manager ;
 KernelAddon write_overlay :
 	write_overlay.cpp
 	;
+
+# The same code, published under the name a container mounts. Its modules are
+# looked up by name, so the no-leak variant needs an add-on file called after
+# it; without one it cannot be found, and only the leaking variant is ever
+# reachable.
+KernelAddon container_overlay :
+	container_overlay.cpp
+	;
