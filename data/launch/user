@@ -12,6 +12,23 @@ target desktop {
 		on initial_volumes_mounted
 	}
 
+	# Keep the Bluetooth stack available independently of the preferences app.
+	# This also lets the server load saved link keys before a paired device
+	# attempts to reconnect after login.
+	service x-vnd.Haiku-bluetooth_server {
+		launch /system/servers/bluetooth_server
+		on initial_volumes_mounted
+		no_safemode
+	}
+
+	# Shows the windows of Wayland programs, such as Linux programs in
+	# containers; started when the first one asks for a display.
+	service x-vnd.Haiku-WaylandServer {
+		launch /system/servers/wayland_server
+		on_demand
+		no_safemode
+	}
+
 	job x-vnd.Haiku-LaunchBox {
 		launch /system/apps/LaunchBox
 		if setting ~/config/settings/LaunchBox/main_settings autostart
