@@ -13,7 +13,14 @@ ISO_PATH=${ISO_PATH:-$BUILD_DIRECTORY/haiku-nightly-anyboot.iso}
 LIBVIRT_URI=${LIBVIRT_URI:-qemu:///system}
 LIBVIRT_POOL=${LIBVIRT_POOL:-default}
 LIBVIRT_ISO_VOLUME=${LIBVIRT_ISO_VOLUME:-haiku-nightly-anyboot.iso}
-VM_NAME=${VM_NAME:-haiku-development}
+if [[ -z ${VM_NAME:-} ]]; then
+	if virsh --connect "${LIBVIRT_URI:-qemu:///system}" domstate haiku-development2 >/dev/null 2>&1 && \
+	   [[ $(virsh --connect "${LIBVIRT_URI:-qemu:///system}" domstate haiku-development2 2>/dev/null) == running ]]; then
+		VM_NAME=haiku-development2
+	else
+		VM_NAME=haiku-development
+	fi
+fi
 USB_VENDOR=${USB_VENDOR:-2357}
 USB_PRODUCT=${USB_PRODUCT:-0604}
 JOBS=${JOBS:-4}
@@ -247,10 +254,15 @@ else
 	configure_bluetooth_debug
 
 	log "Building Haiku AnyBoot image with $JOBS jobs"
-	(
+	# Without this, a failed build leaves the previous image in place and the
+	# deployment below ships it as though it were the one just built.
+	if ! (
 		cd "$BUILD_DIRECTORY"
 		jam -q -j"$JOBS" @nightly-anyboot
-	)
+	); then
+		printf 'The build failed; not deploying.\n' >&2
+		exit 1
+	fi
 fi
 
 if [[ ! -s $ISO_PATH ]]; then
@@ -388,7 +400,7 @@ report_ssh_access() {
 
 	local mac
 	mac=$(virsh --connect "$LIBVIRT_URI" dumpxml "$VM_NAME" \
-		| awk -F"'" '/mac address=/ { print $2; exit }')
+		| sed -n "s/.*<mac address='\([^']*\)'.*/\1/p" | head -n 1)
 	if [[ -z $mac ]]; then
 		return 0
 	fi
