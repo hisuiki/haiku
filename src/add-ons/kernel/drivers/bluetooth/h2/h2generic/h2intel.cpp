@@ -34,6 +34,8 @@
 #define INTEL_BOOT_COMPLETE		0x02
 
 #define INTEL_RSA_HEADER_SIZE	644
+#define INTEL_ECDSA_HEADER_SIZE	320
+#define INTEL_ECDSA_HEADER_OFFSET	INTEL_RSA_HEADER_SIZE
 #define INTEL_COMMAND_TIMEOUT	5000000
 #define INTEL_VERSION_RETRIES	5
 #define INTEL_VERSION_RETRY_DELAY	100000
@@ -72,6 +74,55 @@ struct intel_boot_params {
 	uint8 limitedCommandCompleteEvents;
 	uint8 unlockedState;
 } _PACKED;
+
+
+// Newer Intel controllers return this information as a stream of TLVs when
+// Read Version is sent with the 0xff parameter.
+struct intel_tlv_version {
+	uint32	cnviTop;
+	uint32	cnvrTop;
+	uint32	cnviBluetooth;
+	uint16	deviceRevision;
+	uint8	imageType;
+	uint8	limitedCommandCompleteEvents;
+	uint8	secureBootEngineType;
+};
+
+
+enum {
+	INTEL_TLV_CNVI_TOP = 0x10,
+	INTEL_TLV_CNVR_TOP,
+	INTEL_TLV_CNVI_BT,
+	INTEL_TLV_CNVR_BT,
+	INTEL_TLV_CNVI_OTP,
+	INTEL_TLV_CNVR_OTP,
+	INTEL_TLV_DEVICE_REVISION,
+	INTEL_TLV_USB_VENDOR,
+	INTEL_TLV_USB_PRODUCT,
+	INTEL_TLV_PCIE_VENDOR,
+	INTEL_TLV_PCIE_DEVICE,
+	INTEL_TLV_PCIE_SUBSYSTEM,
+	INTEL_TLV_IMAGE_TYPE,
+	INTEL_TLV_TIMESTAMP,
+	INTEL_TLV_BUILD_TYPE,
+	INTEL_TLV_BUILD_NUMBER,
+	INTEL_TLV_FIRMWARE_BUILD_PRODUCT,
+	INTEL_TLV_FIRMWARE_BUILD_HARDWARE,
+	INTEL_TLV_FIRMWARE_STEP,
+	INTEL_TLV_BLUETOOTH_SPEC,
+	INTEL_TLV_MANUFACTURER_NAME,
+	INTEL_TLV_HCI_REVISION,
+	INTEL_TLV_LMP_SUBVERSION,
+	INTEL_TLV_OTP_PATCH_VERSION,
+	INTEL_TLV_SECURE_BOOT,
+	INTEL_TLV_KEY_FROM_HEADER,
+	INTEL_TLV_OTP_LOCK,
+	INTEL_TLV_API_LOCK,
+	INTEL_TLV_DEBUG_LOCK,
+	INTEL_TLV_MINIMUM_FIRMWARE,
+	INTEL_TLV_LIMITED_COMMAND_COMPLETE,
+	INTEL_TLV_SECURE_BOOT_ENGINE
+};
 
 
 struct intel_event_wait {
@@ -420,6 +471,108 @@ done:
 }
 
 
+static uint32
+intel_read_le32(const uint8* data)
+{
+	uint32 value;
+	memcpy(&value, data, sizeof(value));
+	return B_LENDIAN_TO_HOST_INT32(value);
+}
+
+
+static uint16
+intel_read_le16(const uint8* data)
+{
+	uint16 value;
+	memcpy(&value, data, sizeof(value));
+	return B_LENDIAN_TO_HOST_INT16(value);
+}
+
+
+/*! Read and validate the TLV form of Intel's version record. */
+static status_t
+intel_read_tlv_version(bt_usb_dev* device, intel_tlv_version* version)
+{
+	uint8 response[255];
+	uint8 parameter = 0xff;
+	size_t responseLength = sizeof(response);
+	status_t status = intel_command(device, INTEL_READ_VERSION, &parameter,
+		sizeof(parameter), response, &responseLength);
+	if (status != B_OK)
+		return status;
+	if (responseLength < 1 || response[0] != 0)
+		return B_BAD_DATA;
+
+	memset(version, 0, sizeof(*version));
+	bool haveCnviTop = false;
+	bool haveCnvrTop = false;
+	bool haveCnviBluetooth = false;
+	bool haveImageType = false;
+	for (size_t offset = 1; offset < responseLength;) {
+		if (responseLength - offset < 2)
+			return B_BAD_DATA;
+		uint8 type = response[offset++];
+		uint8 length = response[offset++];
+		if (length > responseLength - offset)
+			return B_BAD_DATA;
+
+		const uint8* value = response + offset;
+		switch (type) {
+			case INTEL_TLV_CNVI_TOP:
+				if (length != 4)
+					return B_BAD_DATA;
+				version->cnviTop = intel_read_le32(value);
+				haveCnviTop = true;
+				break;
+			case INTEL_TLV_CNVR_TOP:
+				if (length != 4)
+					return B_BAD_DATA;
+				version->cnvrTop = intel_read_le32(value);
+				haveCnvrTop = true;
+				break;
+			case INTEL_TLV_CNVI_BT:
+				if (length != 4)
+					return B_BAD_DATA;
+				version->cnviBluetooth = intel_read_le32(value);
+				haveCnviBluetooth = true;
+				break;
+			case INTEL_TLV_DEVICE_REVISION:
+				if (length != 2)
+					return B_BAD_DATA;
+				version->deviceRevision = intel_read_le16(value);
+				break;
+			case INTEL_TLV_IMAGE_TYPE:
+				if (length != 1)
+					return B_BAD_DATA;
+				version->imageType = value[0];
+				haveImageType = true;
+				break;
+			case INTEL_TLV_LIMITED_COMMAND_COMPLETE:
+				if (length != 1)
+					return B_BAD_DATA;
+				version->limitedCommandCompleteEvents = value[0];
+				break;
+			case INTEL_TLV_SECURE_BOOT_ENGINE:
+				if (length != 1)
+					return B_BAD_DATA;
+				version->secureBootEngineType = value[0];
+				break;
+		}
+		offset += length;
+	}
+
+	if (!haveCnviTop || !haveCnvrTop || !haveCnviBluetooth || !haveImageType)
+		return B_BAD_DATA;
+	if (((version->cnviBluetooth & 0x0000ff00) >> 8) != 0x37)
+		return B_NOT_SUPPORTED;
+	if (version->limitedCommandCompleteEvents != 0
+		|| version->secureBootEngineType > 1) {
+		return B_NOT_SUPPORTED;
+	}
+	return B_OK;
+}
+
+
 static status_t
 intel_secure_send(bt_usb_dev* device, uint8 type, const uint8* data,
 	size_t length)
@@ -499,9 +652,9 @@ intel_load_firmware(const char* name, uint8** _data, size_t* _size)
 
 static status_t
 intel_find_boot_address(const uint8* firmware, size_t firmwareSize,
-	uint32* bootAddress)
+	size_t payloadOffset, uint32* bootAddress)
 {
-	size_t offset = INTEL_RSA_HEADER_SIZE;
+	size_t offset = payloadOffset;
 	while (offset + 3 <= firmwareSize) {
 		uint16 opcode = firmware[offset] | ((uint16)firmware[offset + 1] << 8);
 		uint8 length = firmware[offset + 2];
@@ -521,20 +674,35 @@ intel_find_boot_address(const uint8* firmware, size_t firmwareSize,
 
 static status_t
 intel_upload_firmware(bt_usb_dev* device, const uint8* firmware,
-	size_t firmwareSize)
+	size_t firmwareSize, size_t payloadOffset, bool useEcdsaHeader)
 {
-	status_t status = intel_secure_send(device, 0x00, firmware, 128);
+	if (payloadOffset > firmwareSize || firmwareSize - payloadOffset < 3)
+		return B_BAD_DATA;
+
+	const uint8* header = firmware;
+	size_t publicKeyLength = 256;
+	size_t signatureLength = 256;
+	if (useEcdsaHeader) {
+		if (firmwareSize < INTEL_ECDSA_HEADER_OFFSET + INTEL_ECDSA_HEADER_SIZE)
+			return B_BAD_DATA;
+		header += INTEL_ECDSA_HEADER_OFFSET;
+		publicKeyLength = 96;
+		signatureLength = 96;
+	}
+
+	status_t status = intel_secure_send(device, 0x00, header, 128);
 	if (status != B_OK)
 		return status;
-	status = intel_secure_send(device, 0x03, firmware + 128, 256);
+	status = intel_secure_send(device, 0x03, header + 128, publicKeyLength);
 	if (status != B_OK)
 		return status;
-	status = intel_secure_send(device, 0x02, firmware + 388, 256);
+	status = intel_secure_send(device, 0x02, header + 128 + publicKeyLength,
+		signatureLength);
 	if (status != B_OK)
 		return status;
 
 	ERROR("Intel Bluetooth firmware header accepted\n");
-	size_t offset = INTEL_RSA_HEADER_SIZE;
+	size_t offset = payloadOffset;
 	while (offset < firmwareSize) {
 		size_t fragmentLength = 0;
 		do {
@@ -656,6 +824,77 @@ intel_clear_halted_pipe(const usb_endpoint_info* endpoint)
 }
 
 
+static uint16
+intel_pack_top_name_component(uint32 top)
+{
+	uint16 component = ((top & 0x00000fff) << 4) | ((top >> 24) & 0x0f);
+	return B_SWAP_INT16(component);
+}
+
+
+static status_t
+intel_bluetooth_setup_tlv(bt_usb_dev* device)
+{
+	intel_tlv_version version;
+	status_t status = intel_read_tlv_version(device, &version);
+	if (status != B_OK) {
+		ERROR("could not read Intel Bluetooth TLV version: %s\n",
+			strerror(status));
+		return status;
+	}
+
+	uint8 hardwareVariant = (version.cnviBluetooth & 0x003f0000) >> 16;
+	ERROR("Intel Bluetooth TLV controller: hw variant 0x%02x, image 0x%02x, "
+		"CNVi 0x%08" B_PRIx32 ", CNVR 0x%08" B_PRIx32 ", SBE %u\n",
+		hardwareVariant, version.imageType, version.cnviTop, version.cnvrTop,
+		version.secureBootEngineType);
+	if (version.imageType == 0x03)
+		return B_OK;
+	if (version.imageType != 0x01 || hardwareVariant < 0x17)
+		return B_NOT_SUPPORTED;
+
+	char firmwareName[32];
+	snprintf(firmwareName, sizeof(firmwareName), "ibt-%04x-%04x.sfi",
+		intel_pack_top_name_component(version.cnviTop),
+		intel_pack_top_name_component(version.cnvrTop));
+
+	uint8* firmware = NULL;
+	size_t firmwareSize = 0;
+	status = intel_load_firmware(firmwareName, &firmware, &firmwareSize);
+	if (status != B_OK) {
+		ERROR("Intel Bluetooth firmware %s was not found\n", firmwareName);
+		return status;
+	}
+
+	const size_t payloadOffset = INTEL_RSA_HEADER_SIZE + INTEL_ECDSA_HEADER_SIZE;
+	uint32 bootAddress = 0;
+	status = intel_find_boot_address(firmware, firmwareSize, payloadOffset,
+		&bootAddress);
+	if (status == B_OK) {
+		status = intel_upload_firmware(device, firmware, firmwareSize,
+			payloadOffset, version.secureBootEngineType == 1);
+	}
+	free(firmware);
+	if (status != B_OK) {
+		ERROR("uploading Intel Bluetooth firmware failed: %s\n",
+			strerror(status));
+		return status;
+	}
+
+	status = intel_wait_for_vendor_event(device, INTEL_DOWNLOAD_COMPLETE);
+	if (status != B_OK)
+		return status;
+	status = intel_boot_firmware(device, bootAddress);
+	if (status != B_OK)
+		return status;
+
+	intel_clear_halted_pipe(device->bulk_in_ep);
+	intel_clear_halted_pipe(device->bulk_out_ep);
+	ERROR("loaded Intel Bluetooth firmware %s\n", firmwareName);
+	return B_OK;
+}
+
+
 status_t
 intel_bluetooth_setup(bt_usb_dev* device)
 {
@@ -688,10 +927,13 @@ intel_bluetooth_setup(bt_usb_dev* device)
 
 	if (status != B_OK || responseLength != sizeof(version)
 		|| version.status != 0 || version.hardwarePlatform != 0x37) {
+		status_t tlvStatus = intel_bluetooth_setup_tlv(device);
+		if (tlvStatus == B_OK)
+			return B_OK;
 		ERROR("giving up on the Intel Bluetooth version, platform 0x%02x, "
 			"hw variant 0x%02x, fw variant 0x%02x\n", version.hardwarePlatform,
 			version.hardwareVariant, version.firmwareVariant);
-		return status == B_OK ? B_BAD_DATA : status;
+		return tlvStatus;
 	}
 
 	ERROR("Intel Bluetooth controller: hw variant 0x%02x revision 0x%02x, "
@@ -734,9 +976,11 @@ intel_bluetooth_setup(bt_usb_dev* device)
 	}
 
 	uint32 bootAddress = 0;
-	status = intel_find_boot_address(firmware, firmwareSize, &bootAddress);
+	status = intel_find_boot_address(firmware, firmwareSize,
+		INTEL_RSA_HEADER_SIZE, &bootAddress);
 	if (status == B_OK)
-		status = intel_upload_firmware(device, firmware, firmwareSize);
+		status = intel_upload_firmware(device, firmware, firmwareSize,
+			INTEL_RSA_HEADER_SIZE, false);
 	free(firmware);
 	if (status != B_OK) {
 		ERROR("uploading Intel Bluetooth firmware failed: %s\n",
